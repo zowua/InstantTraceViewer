@@ -2,7 +2,10 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Threading.Tasks;
 using ImGuiNET;
+using InstantTraceViewer;
+using InstantTraceViewer.Server;
 
 namespace InstantTraceViewerUI
 {
@@ -10,6 +13,9 @@ namespace InstantTraceViewerUI
     {
         public static int Main(string[] args)
         {
+            // Register the MCP server factory
+            RegisterMcpServerFactory();
+
             if (NativeInterop.WindowInitialize(out nint imguiContext) != 0)
             {
                 return 1;
@@ -206,6 +212,18 @@ namespace InstantTraceViewerUI
             fixed (byte* fontDataPtr = fontData)
             {
                 ImGui.GetIO().Fonts.AddFontFromMemoryTTF((nint)fontDataPtr, fontData.Length, scaledFontSize, fontCfg);
+            }
+        }
+
+        private static void RegisterMcpServerFactory()
+        {
+            // Register the server factory directly - this is safe now that we have a proper reference
+            ServerStartup.RegisterMcpServerFactory();
+            
+            // If no server factory was registered, register a no-op fallback
+            if (!McpServerFactory.IsFactoryRegistered)
+            {
+                McpServerFactory.RegisterServerFactory(port => new NoOpMcpServer());
             }
         }
     }

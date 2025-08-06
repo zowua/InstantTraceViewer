@@ -1,4 +1,4 @@
-/.vs/
+.vs/
 bin/
 obj/
 x64/
@@ -7,3 +7,4 @@ ARM64/
 *.pubxml.user
 *.wapproj.user
 *.csproj.user
+*.cache

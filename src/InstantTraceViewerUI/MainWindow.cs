@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Sockets;
 using System.Numerics;
+using System.Threading.Tasks;
 using AdvancedSharpAdbClient;
 using AdvancedSharpAdbClient.Models;
 using ImGuiNET;
@@ -34,9 +35,24 @@ namespace InstantTraceViewerUI
         private List<LogViewerWindow> _pendingNewLogViewWindows = new();
         private bool _showOpenActiveSession;
         private bool _isDisposed;
+        private McpServerManager _mcpServerManager = new();
 
         public MainWindow(string[] args)
         {
+            // Start the MCP server
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await _mcpServerManager.StartServerAsync(5000);
+                    System.Diagnostics.Debug.WriteLine("MCP Server started on http://localhost:5000");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to start MCP server: {ex.Message}");
+                }
+            });
+
             if (args.Length == 1 && Path.Exists(args[0]))
             {
                 if (Etw.EtwTraceSource.EtlFileExtensions.Contains(Path.GetExtension(args[0]), StringComparer.OrdinalIgnoreCase))
@@ -79,6 +95,26 @@ namespace InstantTraceViewerUI
         {
             // Can't add to _logViewerWindows since the collection might be enumerated during the add.
             _pendingNewLogViewWindows.Add(logViewerWindow);
+            
+            // Register the trace source with the MCP server
+            var traceSource = GetTraceSourceFromLogViewerWindow(logViewerWindow);
+            if (traceSource != null)
+            {
+                _mcpServerManager.RegisterTraceSource(traceSource);
+            }
+        }
+
+        private ITraceSource? GetTraceSourceFromLogViewerWindow(LogViewerWindow window)
+        {
+            // Access the private field using reflection as a simple approach
+            // In a production environment, you might want to add a public property to LogViewerWindow
+            var field = typeof(LogViewerWindow).GetField("_traceSource", 
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (field?.GetValue(window) is SharedTraceSource sharedSource)
+            {
+                return sharedSource.TraceSource;
+            }
+            return null;
         }
 
         public void ShowMessageBox(string message, string title, bool isError)
@@ -146,6 +182,13 @@ namespace InstantTraceViewerUI
             var closedWindows = _logViewerWindows.Where(w => w.IsClosed);
             foreach (var win in closedWindows)
             {
+                // Unregister the trace source from the MCP server
+                var traceSource = GetTraceSourceFromLogViewerWindow(win);
+                if (traceSource != null)
+                {
+                    _mcpServerManager.UnregisterTraceSource(traceSource);
+                }
+                
                 win.Dispose();
             }
 
@@ -543,6 +586,7 @@ namespace InstantTraceViewerUI
                     }
                     _logViewerWindows.Clear();
                     _openActiveSession.Dispose();
+                    _mcpServerManager.Dispose();
                 }
 
                 _isDisposed = true;
