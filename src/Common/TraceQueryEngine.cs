@@ -32,16 +32,20 @@ namespace InstantTraceViewer
             var rules = new ViewerRules();
             if (!string.IsNullOrWhiteSpace(filterExpression))
             {
-                rules.AddRule(filterExpression, TraceRowRuleAction.Include);
-                rules.ApplyFiltering = true;
-
-                // Validate the syntax to provide a meaningful error.
-                var firstRule = rules.Rules.FirstOrDefault();
-                if (firstRule?.ParseResult?.Expression == null)
+                // Validate the syntax first by parsing it ourselves
+                var parser = new TraceTableRowSelectorSyntax(tableSnapshot.Schema);
+                var parseResult = parser.Parse(filterExpression);
+                if (parseResult.Expression == null)
                 {
-                    string error = $"Invalid filter syntax. Expected one of: {string.Join(", ", firstRule.ParseResult.ExpectedTokens)}";
+                    var expectedTokens = parseResult.ExpectedTokens;
+                    string expectedText = expectedTokens != null && expectedTokens.Count > 0 ? 
+                        string.Join(", ", expectedTokens) : "valid expression";
+                    string error = $"Invalid filter syntax. Expected one of: {expectedText}";
                     return new QueryResult { Snapshot = null, ErrorMessage = error };
                 }
+
+                rules.AddRule(filterExpression, TraceRowRuleAction.Include);
+                rules.ApplyFiltering = true;
             }
 
             var filteredBuilder = new FilteredTraceTableBuilder();
