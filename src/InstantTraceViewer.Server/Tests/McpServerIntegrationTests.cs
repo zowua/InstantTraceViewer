@@ -30,7 +30,7 @@ namespace InstantTraceViewer.Server.Tests
         }
 
         [Fact]
-        public async Task TraceManager_CanAddTraceSource()
+        public void TraceManager_CanAddTraceSource()
         {
             // Arrange
             using var scope = _factory.Services.CreateScope();

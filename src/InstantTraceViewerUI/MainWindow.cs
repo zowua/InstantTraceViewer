@@ -44,8 +44,8 @@ namespace InstantTraceViewerUI
             {
                 try
                 {
-                    await _mcpServerManager.StartServerAsync(5000);
-                    System.Diagnostics.Debug.WriteLine("MCP Server started on http://localhost:5000");
+                    await _mcpServerManager.StartServerAsync(15496);
+                    System.Diagnostics.Debug.WriteLine("MCP Server started on http://localhost:15496");
                 }
                 catch (Exception ex)
                 {
@@ -98,9 +98,18 @@ namespace InstantTraceViewerUI
             
             // Register the trace source with the MCP server
             var traceSource = GetTraceSourceFromLogViewerWindow(logViewerWindow);
+            var logFile = Path.Combine(Path.GetTempPath(), "InstantTraceViewer_MCP_Debug.log");
+            var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+            File.AppendAllText(logFile, $"[{timestamp}] MainWindow: AddLogViewerWindow called, traceSource: {traceSource?.DisplayName ?? "null"}\n");
+            
             if (traceSource != null)
             {
+                File.AppendAllText(logFile, $"[{timestamp}] MainWindow: Calling RegisterTraceSource\n");
                 _mcpServerManager.RegisterTraceSource(traceSource);
+            }
+            else
+            {
+                File.AppendAllText(logFile, $"[{timestamp}] MainWindow: traceSource is null, not registering\n");
             }
         }
 
@@ -324,7 +333,8 @@ namespace InstantTraceViewerUI
                                     ShowMessageBox($"{Path.GetFileName(file)} has {etlSession.LostEvents:N0} lost events.", "Warning", isError: false);
                                 }
 
-                                _logViewerWindows.Add(new LogViewerWindow(etlSession));
+                                var logViewerWindow = new LogViewerWindow(etlSession);
+                                AddLogViewerWindow(logViewerWindow);
                             }
                             catch (Exception ex)
                             {

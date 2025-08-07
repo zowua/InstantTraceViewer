@@ -12,7 +12,7 @@ public class Program
     {
         var builder = Host.CreateApplicationBuilder(args);
 
-        // Add MCP server
+        // Add MCP server with STDIO transport
         builder.Services.AddMcpServer()
             .WithStdioServerTransport()
             .WithToolsFromAssembly();

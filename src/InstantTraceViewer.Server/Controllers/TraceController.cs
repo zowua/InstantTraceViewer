@@ -36,12 +36,13 @@ namespace InstantTraceViewer.Server.Controllers
                 }
 
                 var filteredSnapshot = queryResult.Snapshot;
+                if (filteredSnapshot == null) continue;
 
                 // Collect the filtered events
                 for (int i = 0; i < filteredSnapshot.RowCount && allEvents.Count < limit; i++)
                 {
                     var row = new Dictionary<string, object>();
-                    row["source"] = source.DisplayName;
+                    row["source"] = source.DisplayName ?? "Unknown";
                     
                     foreach (var col in filteredSnapshot.Schema.Columns)
                     {

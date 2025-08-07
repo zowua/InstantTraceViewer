@@ -1,0 +1,9 @@
+{
+	"servers": {
+		"InstantTraceViewer": {
+			"url": "http://localhost:15496",
+			"type": "http"
+		}
+	},
+	"inputs": []
+}
