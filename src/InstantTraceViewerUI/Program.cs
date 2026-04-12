@@ -112,6 +112,7 @@ namespace InstantTraceViewerUI
 
             // ImGui Q&A recommends rounding down font size after applying DPI scaling.
             float CalcScaledFontSize(float fontSize) => (float)Math.Floor(fontSize * GetDpiScale());
+            float rasterizerDensity = GetFontRasterizerDensity();
 
             bool needsRebuild = ImGui.GetIO().Fonts.TexID != nint.Zero;
             ImGui.GetIO().Fonts.Clear();
@@ -119,12 +120,14 @@ namespace InstantTraceViewerUI
             FontType font = Settings.Font;
             if (font == FontType.ProggyClean)
             {
-                ImGui.GetIO().Fonts.AddFontDefault();
+                ImFontConfigPtr fontCfg = ImGuiNative.ImFontConfig_ImFontConfig();
+                fontCfg.RasterizerDensity = rasterizerDensity;
+                ImGui.GetIO().Fonts.AddFontDefault(fontCfg);
             }
             else
             {
                 byte[] ttfFontBytes = GetPlatformFontBytes(font);
-                AddFontFromBytes(CalcScaledFontSize(Settings.FontSize), ttfFontBytes);
+                AddFontFromBytes(CalcScaledFontSize(Settings.FontSize), ttfFontBytes, rasterizerDensity: rasterizerDensity);
             }
 
             // Load symbol font
@@ -162,7 +165,7 @@ namespace InstantTraceViewerUI
                     0xF31E, // "maximize"
                     0xF53F, // "palette"
                     0xF78C, // "minimize"
-                ]);
+                ], rasterizerDensity: rasterizerDensity);
             }
 
             if (needsRebuild)
@@ -238,7 +241,18 @@ namespace InstantTraceViewerUI
             return null;
         }
 
-        private static unsafe void AddFontFromBytes(float scaledFontSize, byte[] fontData, bool mergeMode = false, ushort[]? glyphRanges = null)
+        private static float GetFontRasterizerDensity()
+        {
+            if (!OperatingSystem.IsMacOS())
+            {
+                return 1.0f;
+            }
+
+            ImPtrVector<ImGuiPlatformMonitorPtr> monitors = ImGui.GetPlatformIO().Monitors;
+            return monitors.Size > 0 ? Math.Max(monitors[0].DpiScale, 1.0f) : 1.0f;
+        }
+
+        private static unsafe void AddFontFromBytes(float scaledFontSize, byte[] fontData, bool mergeMode = false, ushort[]? glyphRanges = null, float rasterizerDensity = 1.0f)
         {
             // Note this ImVector is leaked but that is OK because ImGui needs the memory kept alive for the lifetime of the font atlas.
             // It's a small amount of memory to leak and only when the user changes font settings.
@@ -257,6 +271,7 @@ namespace InstantTraceViewerUI
             fontCfg.MergeMode = mergeMode;
             fontCfg.FontDataOwnedByAtlas = false;
             fontCfg.GlyphRanges = glyphRangesVector.Data;
+            fontCfg.RasterizerDensity = rasterizerDensity;
             fixed (byte* fontDataPtr = fontData)
             {
                 ImGui.GetIO().Fonts.AddFontFromMemoryTTF((nint)fontDataPtr, fontData.Length, scaledFontSize, fontCfg);
