@@ -6,6 +6,7 @@ namespace InstantTraceViewerUI.Perfetto
     class PerfettoTraceTableSnapshot : ITraceTableSnapshot
     {
         public ListBuilderSnapshot<PerfettoRecord> RecordSnapshot { get; init; }
+        public bool UsesRelativeTimestamps { get; init; }
 
         #region ITraceRecordSnapshot
         public TraceTableSchema Schema { get; init; }
@@ -45,7 +46,9 @@ namespace InstantTraceViewerUI.Perfetto
             }
             else if (column == PerfettoTraceSource.ColumnTime)
             {
-                return FriendlyStringify.ToString(traceRecord.Timestamp);
+                return UsesRelativeTimestamps ?
+                    FriendlyStringify.ToString(traceRecord.Timestamp - DateTime.UnixEpoch) :
+                    FriendlyStringify.ToString(traceRecord.Timestamp);
             }
             else if (column == PerfettoTraceSource.ColumnName)
             {

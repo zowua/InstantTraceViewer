@@ -1,9 +1,8 @@
-﻿using InstantTraceViewerUI.Etw;
-using Microsoft.Win32;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 
 namespace InstantTraceViewerUI
 {
@@ -17,7 +16,33 @@ namespace InstantTraceViewerUI
 
     internal static class Settings
     {
-        private static RegistryKey Key = Registry.CurrentUser.CreateSubKey(@"Software\InstantTraceViewerUI", true /* writable */);
+        private sealed class SettingsStore
+        {
+            public string? Theme { get; set; }
+            public string? Font { get; set; }
+            public int? FontSize { get; set; }
+            public string? WprpOpenLocation { get; set; }
+            public string? CsvOpenLocation { get; set; }
+            public string? TsvOpenLocation { get; set; }
+            public string? PerfettoOpenLocation { get; set; }
+            public string? EtlOpenLocation { get; set; }
+            public string? ItvfLocation { get; set; }
+            public List<string>? RecentlyOpenedWprp { get; set; }
+            public List<string>? RecentlyOpenedItvf { get; set; }
+        }
+
+        private static readonly JsonSerializerOptions SerializerOptions = new JsonSerializerOptions
+        {
+            WriteIndented = true
+        };
+
+        private static readonly string SettingsDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "InstantTraceViewer");
+        private static readonly string SettingsPath = Path.Combine(SettingsDirectory, "settings.json");
+
+        private static readonly object Sync = new();
+        private static readonly SettingsStore Store = LoadStore();
 
         private static FontType _cachedFont;
         private static int _cachedFontSize;
@@ -25,9 +50,9 @@ namespace InstantTraceViewerUI
 
         static Settings()
         {
-            _cachedFont = Enum.TryParse(Key.GetValue("Font", null) as string, out FontType font) ? font : FontType.SegoeUI;
-            _cachedFontSize = (int)Key.GetValue("FontSize", 17);
-            _imguiTheme = Enum.TryParse(Key.GetValue("Theme", null) as string, out ImGuiTheme theme) ? theme : ImGuiTheme.Light;
+            _cachedFont = Enum.TryParse(Store.Font, out FontType font) ? font : FontType.SegoeUI;
+            _cachedFontSize = Store.FontSize ?? 17;
+            _imguiTheme = Enum.TryParse(Store.Theme, out ImGuiTheme theme) ? theme : ImGuiTheme.Light;
         }
 
         public static ImGuiTheme Theme
@@ -36,7 +61,8 @@ namespace InstantTraceViewerUI
             set
             {
                 _imguiTheme = value;
-                Key.SetValue("Theme", value.ToString());
+                Store.Theme = value.ToString();
+                SaveStore();
             }
         }
 
@@ -46,7 +72,8 @@ namespace InstantTraceViewerUI
             set
             {
                 _cachedFont = value;
-                Key.SetValue("Font", value.ToString());
+                Store.Font = value.ToString();
+                SaveStore();
             }
         }
 
@@ -56,67 +83,58 @@ namespace InstantTraceViewerUI
             set
             {
                 _cachedFontSize = value;
-                Key.SetValue("FontSize", value);
+                Store.FontSize = value;
+                SaveStore();
             }
         }
 
         public static string? WprpOpenLocation
         {
-            get
-            {
-                return Key.GetValue("WprpOpenLocation", null) as string;
-            }
+            get => Store.WprpOpenLocation;
             set
             {
-                Key.SetValue("WprpOpenLocation", value!);
+                Store.WprpOpenLocation = value;
+                SaveStore();
             }
         }
 
         public static string? CsvOpenLocation
         {
-            get
-            {
-                return Key.GetValue("CsvOpenLocation", null) as string;
-            }
+            get => Store.CsvOpenLocation;
             set
             {
-                Key.SetValue("CsvOpenLocation", value!);
+                Store.CsvOpenLocation = value;
+                SaveStore();
             }
         }
 
         public static string? TsvOpenLocation
         {
-            get
-            {
-                return Key.GetValue("TsvOpenLocation", null) as string;
-            }
+            get => Store.TsvOpenLocation;
             set
             {
-                Key.SetValue("TsvOpenLocation", value!);
+                Store.TsvOpenLocation = value;
+                SaveStore();
             }
         }
 
         public static string? PerfettoOpenLocation
         {
-            get
-            {
-                return Key.GetValue("PerfettoOpenLocation", null) as string;
-            }
+            get => Store.PerfettoOpenLocation;
             set
             {
-                Key.SetValue("PerfettoOpenLocation", value!);
+                Store.PerfettoOpenLocation = value;
+                SaveStore();
             }
         }
 
         public static string? EtlOpenLocation
         {
-            get
-            {
-                return Key.GetValue("EtlOpenLocation") as string;
-            }
+            get => Store.EtlOpenLocation;
             set
             {
-                Key.SetValue("EtlOpenLocation", value!);
+                Store.EtlOpenLocation = value;
+                SaveStore();
             }
         }
 
@@ -124,92 +142,134 @@ namespace InstantTraceViewerUI
         {
             get
             {
-                var location = Key.GetValue("ItvfLocation", null) as string;
+                string? location = Store.ItvfLocation;
                 if (string.IsNullOrEmpty(location))
                 {
                     location = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Instant Trace Viewer Filters");
                     try
                     {
-                        if (!Path.Exists(location))
+                        if (!Directory.Exists(location))
                         {
                             Directory.CreateDirectory(location);
-                            return location;
                         }
                     }
                     catch
                     {
                     }
                 }
+
                 return location;
             }
             set
             {
-                Key.SetValue("ItvfLocation", value!);
+                Store.ItvfLocation = value;
+                SaveStore();
             }
         }
 
         public static void AddRecentlyOpenedWprp(string file)
         {
-            AddMru("RecentlyOpenedWprp", file);
+            AddMru(Store.RecentlyOpenedWprp ??= new List<string>(), file);
         }
 
         public static IReadOnlyList<string> GetRecentlyOpenedWprp()
         {
-            return GetMru("RecentlyOpenedWprp");
+            return GetExistingFiles(Store.RecentlyOpenedWprp);
         }
 
         public static void AddRecentlyUsedItvf(string file)
         {
-            AddMru("RecentlyOpenedItfv", file);
+            AddMru(Store.RecentlyOpenedItvf ??= new List<string>(), file);
         }
 
         public static IReadOnlyList<string> GetRecentlyOpenedItfv()
         {
-            return GetMru("RecentlyOpenedItfv");
-        }
-
-        public static IReadOnlyList<string> GetMru(string settingsName)
-        {
-            var recentlyOpenedStr = Key.GetValue(settingsName, "") as string;
-            var recentlyOpenedList = recentlyOpenedStr.Split(';').Where(File.Exists).ToList();
-            return recentlyOpenedList;
-        }
-
-        public static void AddMru(string settingsName, string recentlyOpenedFile)
-        {
-            var recentlyOpenedStr = Key.GetValue(settingsName, "") as string;
-            var recentlyOpenedList = recentlyOpenedStr.Split(';').ToList();
-            recentlyOpenedList.Insert(0, recentlyOpenedFile);
-
-            recentlyOpenedList = recentlyOpenedList.Distinct().ToList();
-            if (recentlyOpenedList.Count > 10)
-            {
-                recentlyOpenedList.RemoveRange(10, recentlyOpenedList.Count - 10);
-            }
-
-            recentlyOpenedStr = string.Join(";", recentlyOpenedList);
-            Key.SetValue(settingsName, recentlyOpenedStr);
+            return GetExistingFiles(Store.RecentlyOpenedItvf);
         }
 
         public static void AssociateWithEtlExtensions()
         {
+            if (!OperatingSystem.IsWindows())
+            {
+                throw new PlatformNotSupportedException("ETL file association is only supported on Windows.");
+            }
+
             string exePath = Path.Combine(AppContext.BaseDirectory, "InstantTraceViewerUI.exe");
 
-            using var progIdKey = Registry.CurrentUser.CreateSubKey(@"Software\Classes\InstantTraceViewerUI.etl");
-            using var iconKey = progIdKey.CreateSubKey("DefaultIcon");
+            using var progIdKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Classes\InstantTraceViewerUI.etl");
+            using var iconKey = progIdKey!.CreateSubKey("DefaultIcon");
             using var openKey = progIdKey.CreateSubKey("shell\\open");
             using var commandKey = progIdKey.CreateSubKey("shell\\open\\command");
 
             progIdKey.SetValue("", "ETL Trace file");
-            iconKey.SetValue("", Path.Combine(AppContext.BaseDirectory, "Assets", "Logo.ico"));
-            openKey.SetValue("Icon", $"\"{exePath}\"");
-            commandKey.SetValue("", $"\"{exePath}\" \"%1\"");
+            iconKey!.SetValue("", Path.Combine(AppContext.BaseDirectory, "Assets", "Logo.ico"));
+            openKey!.SetValue("Icon", $"\"{exePath}\"");
+            commandKey!.SetValue("", $"\"{exePath}\" \"%1\"");
 
-            foreach (string ext in EtwTraceSource.EtlFileExtensions)
+            foreach (string ext in Etw.EtwTraceSource.EtlFileExtensions)
             {
-                using var openWithKey = Registry.CurrentUser.CreateSubKey(@"Software\Classes\.etl\OpenWithProgids");
-                openWithKey.SetValue("", "InstantTraceViewerUI.etl");
+                using var openWithKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey($@"Software\Classes\{ext}\OpenWithProgids");
+                openWithKey!.SetValue("", "InstantTraceViewerUI.etl");
                 openWithKey.SetValue("InstantTraceViewerUI.etl", "");
+            }
+        }
+
+        private static IReadOnlyList<string> GetExistingFiles(List<string>? values)
+        {
+            return (values ?? new List<string>()).Where(File.Exists).ToList();
+        }
+
+        private static void AddMru(List<string> items, string path)
+        {
+            items.Insert(0, path);
+
+            List<string> deduped = new();
+            foreach (string item in items)
+            {
+                if (!deduped.Contains(item, StringComparer.Ordinal))
+                {
+                    deduped.Add(item);
+                }
+            }
+
+            if (deduped.Count > 10)
+            {
+                deduped.RemoveRange(10, deduped.Count - 10);
+            }
+
+            items.Clear();
+            items.AddRange(deduped);
+            SaveStore();
+        }
+
+        private static SettingsStore LoadStore()
+        {
+            try
+            {
+                if (File.Exists(SettingsPath))
+                {
+                    string json = File.ReadAllText(SettingsPath);
+                    SettingsStore? store = JsonSerializer.Deserialize<SettingsStore>(json);
+                    if (store != null)
+                    {
+                        return store;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return new SettingsStore();
+        }
+
+        private static void SaveStore()
+        {
+            lock (Sync)
+            {
+                Directory.CreateDirectory(SettingsDirectory);
+                string json = JsonSerializer.Serialize(Store, SerializerOptions);
+                File.WriteAllText(SettingsPath, json);
             }
         }
     }

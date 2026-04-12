@@ -365,11 +365,6 @@ Examples:
 
         private static void RenderParsingError(uint inputTextId, string inputText, TraceTableRowSelectorParseResults parseResults, Vector2 inputScreenPos)
         {
-            NativeInterop.CurrentInputTextState inputState = NativeInterop.GetCurrentInputTextState();
-
-            // Don't use the input state to align the error message unless it is in focus so that we have the correct ScrollX.
-            bool inputStateUsable = inputState.Id == inputTextId;
-
             var expectedTokens = parseResults.ExpectedTokens.ToArray();
             var matchingExpectedTokens = expectedTokens.Where(t => t.StartsWith(parseResults.ActualToken.Text)).ToArray();
             var autocompleteOptions = matchingExpectedTokens.Any() ? matchingExpectedTokens : expectedTokens;
@@ -381,7 +376,7 @@ Examples:
 
                 Vector2 skipSize = ImGui.CalcTextSize(inputText.Substring(0, parseResults.ExpectedTokenStartIndex));
 
-                float expectedXOffset = skipSize.X - (inputStateUsable ? inputState.ScrollX : 0) + InputTextPadding;
+                float expectedXOffset = skipSize.X + InputTextPadding;
 
                 // Underline the bad token
                 ImGui.SameLine();

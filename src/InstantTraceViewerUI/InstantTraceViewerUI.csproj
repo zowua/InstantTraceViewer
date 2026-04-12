@@ -1,27 +1,40 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
-    <TargetPlatformMinVersion>10.0.22621.0</TargetPlatformMinVersion>
     <RootNamespace>InstantTraceViewerUI</RootNamespace>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Platforms>x64;ARM64</Platforms>
-    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
-    <SupportedOSPlatformVersion>10.0.22621.0</SupportedOSPlatformVersion>
     <StartupObject>InstantTraceViewerUI.Program</StartupObject>
     <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
     <Nullable>annotations</Nullable>
+    <Platforms>x64;ARM64</Platforms>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' != 'true'">
+    <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0-windows10.0.22621.0'">
+    <OutputType>WinExe</OutputType>
+    <TargetPlatformMinVersion>10.0.22621.0</TargetPlatformMinVersion>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <SupportedOSPlatformVersion>10.0.22621.0</SupportedOSPlatformVersion>
     <ApplicationIcon>Assets\Logo.ico</ApplicationIcon>
 
     <!-- AOT compilation may improve startup times -->
     <PublishReadyToRun>true</PublishReadyToRun>
-
     <PublishTrimmed>true</PublishTrimmed>
-
     <SelfContained>true</SelfContained>
 
     <!-- Single file has slower startup on first run (Defender scan?)-->
     <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <OutputType>Exe</OutputType>
+    <RuntimeIdentifiers>osx-arm64;osx-x64</RuntimeIdentifiers>
   </PropertyGroup>
   <ItemGroup>
     <None Remove="Assets\DroidSans-Bold.ttf" />
@@ -52,12 +65,15 @@
     <PackageReference Include="Google.Protobuf" Version="3.30.2" />
     <PackageReference Include="Google.Protobuf.Tools" Version="3.30.2" />
     <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.1.29" />
-    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7463" />
     <PackageReference Include="System.IO.Hashing" Version="10.0.2" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-windows10.0.22621.0'">
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7463" />
     <Manifest Include="$(ApplicationManifest)" />
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-windows10.0.22621.0'">
     <Content Include="$(ProjectDir)\..\cimgui\$(Platform)\$(Configuration)\cimgui.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -81,11 +97,18 @@
   <ItemGroup>
     <ProjectReference Include="..\..\ThirdParty\ImGuiNET\src\ImGui.NET\ImGui.NET.csproj" />
     <ProjectReference Include="..\Common\Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-windows10.0.22621.0'">
     <ProjectReference Include="..\InstantTraceViewerNative\InstantTraceViewerNative.vcxproj" />
   </ItemGroup>
 
-  <Target Name="GenerateProto" BeforeTargets="PrepareForBuild" Inputs="Perfetto\Protobuf\perfetto_trace.proto" Outputs="Perfetto\Protobuf\PerfettoTrace.cs">
+  <Target Name="GenerateProto" BeforeTargets="PrepareForBuild" Inputs="Perfetto\Protobuf\perfetto_trace.proto" Outputs="Perfetto\Protobuf\PerfettoTrace.cs" Condition="'$(TargetFramework)' == 'net8.0-windows10.0.22621.0'">
     <Message Importance="High" Text="Updating C# from Perfetto protobuf file..." />
     <Exec Command="$(protoc_windows64) --csharp_out=Perfetto\Protobuf Perfetto\Protobuf\perfetto_trace.proto" />
+  </Target>
+
+  <Target Name="BuildMacNative" BeforeTargets="PrepareForBuild" Condition="'$(TargetFramework)' == 'net8.0' and '$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">
+    <Exec Command="bash &quot;$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../scripts/build-macos-native.sh'))&quot; &quot;$(MSBuildProjectDirectory)&quot; &quot;$(TargetDir)&quot;" />
   </Target>
 </Project>

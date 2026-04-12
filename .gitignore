@@ -7,3 +7,6 @@ ARM64/
 *.pubxml.user
 *.wapproj.user
 *.csproj.user
+.tmp-mac-native/
+src/InstantTraceViewerUI/native/
+imgui.ini

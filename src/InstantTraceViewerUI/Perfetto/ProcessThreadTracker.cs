@@ -1,7 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
 using Perfetto.Protos;
-using Windows.Networking.Sockets;
 
 namespace InstantTraceViewerUI.Perfetto
 {

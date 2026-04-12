@@ -94,6 +94,13 @@ namespace InstantTraceViewerUI
 
         private static float GetDpiScale()
         {
+            if (!OperatingSystem.IsWindows())
+            {
+                // Cocoa already exposes window/view geometry in logical points,
+                // so applying monitor scale again makes the UI 2x too large on Retina displays.
+                return 1.0f;
+            }
+
             // For now, use the scale of the primary monitor
             ImPtrVector<ImGuiPlatformMonitorPtr> monitors = ImGui.GetPlatformIO().Monitors;
             return monitors.Size > 0 ? monitors[0].DpiScale : 1.0f;
@@ -116,15 +123,7 @@ namespace InstantTraceViewerUI
             }
             else
             {
-                string systemFontPath = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
-                string segoeUiPath = Path.Combine(systemFontPath, "segoeui.ttf");
-                string segoeUiVariablePath = Path.Combine(systemFontPath, "SegUIVar.ttf"); // Windows 11 font with better legibility.
-
-                byte[] ttfFontBytes =
-                    font == FontType.SegoeUI && File.Exists(segoeUiVariablePath) ? File.ReadAllBytes(segoeUiVariablePath) :
-                    font == FontType.SegoeUI && File.Exists(segoeUiPath) ? File.ReadAllBytes(segoeUiPath) : // Fallback to old segoe ui font if the new one is not available.
-                    font == FontType.CascadiaMono ? GetEmbeddedResourceBytes("CascadiaMono.ttf") :
-                    GetEmbeddedResourceBytes("DroidSans.ttf");
+                byte[] ttfFontBytes = GetPlatformFontBytes(font);
                 AddFontFromBytes(CalcScaledFontSize(Settings.FontSize), ttfFontBytes);
             }
 
@@ -183,6 +182,60 @@ namespace InstantTraceViewerUI
                 Debug.Assert(readLength == s.Length, "Failed to read the entire embedded resource stream.");
                 return ret;
             }
+        }
+
+        private static byte[] GetPlatformFontBytes(FontType font)
+        {
+            if (OperatingSystem.IsMacOS())
+            {
+                return font switch
+                {
+                    FontType.SegoeUI => ReadFirstExistingFont(
+                        "/System/Library/Fonts/SFNS.ttf",
+                        "/System/Library/Fonts/HelveticaNeue.ttc")
+                        ?? GetEmbeddedResourceBytes("DroidSans.ttf"),
+                    FontType.DroidSans => ReadFirstExistingFont(
+                        "/System/Library/Fonts/HelveticaNeue.ttc",
+                        "/System/Library/Fonts/Geneva.ttf")
+                        ?? GetEmbeddedResourceBytes("DroidSans.ttf"),
+                    FontType.CascadiaMono => ReadFirstExistingFont(
+                        "/System/Library/Fonts/Menlo.ttc",
+                        "/System/Library/Fonts/Monaco.ttf",
+                        "/System/Library/Fonts/SFNSMono.ttf")
+                        ?? GetEmbeddedResourceBytes("CascadiaMono.ttf"),
+                    _ => GetEmbeddedResourceBytes("DroidSans.ttf")
+                };
+            }
+
+            if (OperatingSystem.IsWindows())
+            {
+                string systemFontPath = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+                string segoeUiPath = Path.Combine(systemFontPath, "segoeui.ttf");
+                string segoeUiVariablePath = Path.Combine(systemFontPath, "SegUIVar.ttf"); // Windows 11 font with better legibility.
+
+                return
+                    font == FontType.SegoeUI && File.Exists(segoeUiVariablePath) ? File.ReadAllBytes(segoeUiVariablePath) :
+                    font == FontType.SegoeUI && File.Exists(segoeUiPath) ? File.ReadAllBytes(segoeUiPath) :
+                    font == FontType.CascadiaMono ? GetEmbeddedResourceBytes("CascadiaMono.ttf") :
+                    GetEmbeddedResourceBytes("DroidSans.ttf");
+            }
+
+            return
+                font == FontType.CascadiaMono ? GetEmbeddedResourceBytes("CascadiaMono.ttf") :
+                GetEmbeddedResourceBytes("DroidSans.ttf");
+        }
+
+        private static byte[]? ReadFirstExistingFont(params string[] candidates)
+        {
+            foreach (string candidate in candidates)
+            {
+                if (File.Exists(candidate))
+                {
+                    return File.ReadAllBytes(candidate);
+                }
+            }
+
+            return null;
         }
 
         private static unsafe void AddFontFromBytes(float scaledFontSize, byte[] fontData, bool mergeMode = false, ushort[]? glyphRanges = null)

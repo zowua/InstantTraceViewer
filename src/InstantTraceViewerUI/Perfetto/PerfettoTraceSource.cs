@@ -1,9 +1,12 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.IO.Compression;
 using System.IO;
 using System.Threading;
 using System.Linq;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using InstantTraceViewer;
 using Google.Protobuf;
 using Perfetto.Protos;
@@ -35,21 +38,27 @@ namespace InstantTraceViewerUI.Perfetto
 
         private static readonly JsonFormatter JsonFormatter = new JsonFormatter(JsonFormatter.Settings.Default.WithIndentation());
 
-        private readonly FileStream _fileStream;
+        private readonly Stream _traceStream;
         private readonly string _displayName;
+        private readonly DateTime? _inferredRealtimeOrigin;
 
         private readonly ReaderWriterLockSlim _traceRecordsLock = new ReaderWriterLockSlim();
         private ListBuilder<PerfettoRecord> _traceRecords = new ListBuilder<PerfettoRecord>();
         private int _generationId = 0;
         private readonly CancellationTokenSource _tokenSource = new CancellationTokenSource();
         private readonly Thread _readThread;
+        private bool _usesRelativeTimestamps = false;
 
         private Dictionary<uint, Stack<string>> _sliceBeginNames = new Dictionary<uint, Stack<string>>();
 
         public PerfettoTraceSource(string perfettoPath)
         {
-            _fileStream = new FileStream(perfettoPath, FileMode.Open, FileAccess.Read);
+            FileStream fileStream = new FileStream(perfettoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            _traceStream = perfettoPath.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) ?
+                new GZipStream(fileStream, CompressionMode.Decompress) :
+                fileStream;
             _displayName = Path.GetFileName(perfettoPath);
+            _inferredRealtimeOrigin = TryInferRealtimeOrigin(perfettoPath, out DateTime inferredRealtimeOrigin) ? inferredRealtimeOrigin : null;
 
             _readThread = new Thread(ReadThread);
             _readThread.Start();
@@ -84,6 +93,7 @@ namespace InstantTraceViewerUI.Perfetto
                     RecordSnapshot = _traceRecords.CreateSnapshot(),
                     GenerationId = _generationId,
                     Schema = _schema,
+                    UsesRelativeTimestamps = _usesRelativeTimestamps,
                 };
             }
             finally
@@ -95,6 +105,7 @@ namespace InstantTraceViewerUI.Perfetto
         public void Dispose()
         {
             _tokenSource.Cancel();
+            _traceStream.Dispose();
         }
 
         private async void ReadThread()
@@ -103,10 +114,11 @@ namespace InstantTraceViewerUI.Perfetto
             {
                 List<PerfettoRecord> records = new();
 
-                Trace trace = Trace.Parser.ParseFrom(_fileStream);
+                Trace trace = Trace.Parser.ParseFrom(_traceStream);
 
                 var processThreadTracker = new ProcessThreadTracker();
-                var clockSync = new PerfettoClockConverter(trace);
+                var clockSync = new PerfettoClockConverter(trace, _inferredRealtimeOrigin);
+                _usesRelativeTimestamps = clockSync.UsesSyntheticRealtime && !clockSync.InferredRealtimeOrigin.HasValue;
 
                 // First pass: Preprocess packets for process and thread names.
                 foreach (var packet in trace.Packet)
@@ -278,6 +290,40 @@ namespace InstantTraceViewerUI.Perfetto
                     }
                 }
             }
+        }
+
+        private static bool TryInferRealtimeOrigin(string perfettoPath, out DateTime inferredRealtimeOrigin)
+        {
+            string fileNameWithoutExtensions = Path.GetFileNameWithoutExtension(Path.GetFileNameWithoutExtension(perfettoPath));
+            Match fileNameTimestampMatch = Regex.Match(fileNameWithoutExtensions, @"(?<!\d)(\d{8}[-_]\d{6})(?!\d)");
+            if (fileNameTimestampMatch.Success &&
+                DateTime.TryParseExact(
+                    fileNameTimestampMatch.Groups[1].Value,
+                    ["yyyyMMdd-HHmmss", "yyyyMMdd_HHmmss"],
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out DateTime parsedDateTime))
+            {
+                inferredRealtimeOrigin = DateTime.SpecifyKind(parsedDateTime, DateTimeKind.Utc);
+                return true;
+            }
+
+            DateTime creationTime = File.GetCreationTime(perfettoPath);
+            if (creationTime > DateTime.UnixEpoch)
+            {
+                inferredRealtimeOrigin = DateTime.SpecifyKind(creationTime, DateTimeKind.Utc);
+                return true;
+            }
+
+            DateTime lastWriteTime = File.GetLastWriteTime(perfettoPath);
+            if (lastWriteTime > DateTime.UnixEpoch)
+            {
+                inferredRealtimeOrigin = DateTime.SpecifyKind(lastWriteTime, DateTimeKind.Utc);
+                return true;
+            }
+
+            inferredRealtimeOrigin = default;
+            return false;
         }
 
         private void ProcessTrackEvent(List<PerfettoRecord> records, TracePacket packet, InternedStringManager internedStringManager, ProcessThreadTracker processThreadTracker, PerfettoClockConverter clockConverter)

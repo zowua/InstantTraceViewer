@@ -35,16 +35,26 @@ namespace InstantTraceViewerUI
         private bool _showOpenActiveSession;
         private bool _isDisposed;
 
+        private static bool IsPerfettoFile(string path)
+        {
+            string extension = Path.GetExtension(path);
+            return
+                string.Equals(extension, ".perfetto-trace", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(extension, ".perfetto_trace", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(extension, ".pftrace", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(".perfetto_trace.gz", StringComparison.OrdinalIgnoreCase);
+        }
+
         public MainWindow(string[] args)
         {
             if (args.Length == 1 && Path.Exists(args[0]))
             {
-                if (Etw.EtwTraceSource.EtlFileExtensions.Contains(Path.GetExtension(args[0]), StringComparer.OrdinalIgnoreCase))
+                if (OperatingSystem.IsWindows() && Etw.EtwTraceSource.EtlFileExtensions.Contains(Path.GetExtension(args[0]), StringComparer.OrdinalIgnoreCase))
                 {
                     var etlSession = Etw.EtwTraceSource.CreateEtlSession(args[0]);
                     _logViewerWindows.Add(new LogViewerWindow(etlSession));
                 }
-                else if (string.Equals(Path.GetExtension(args[0]), ".wprp", StringComparison.OrdinalIgnoreCase))
+                else if (OperatingSystem.IsWindows() && string.Equals(Path.GetExtension(args[0]), ".wprp", StringComparison.OrdinalIgnoreCase))
                 {
                     var wprp = Etw.Wprp.Load(args[0]);
                     var realTimeSession = Etw.EtwTraceSource.CreateRealTimeSession(wprp.Profiles[0].ConvertToSessionProfile());
@@ -62,10 +72,7 @@ namespace InstantTraceViewerUI
                     var tsvTableSource = new TsvTableSource(args[0], firstRowIsHeader: true, readInBackground: true);
                     _logViewerWindows.Add(new LogViewerWindow(tsvTableSource));
                 }
-                else if (
-                    string.Equals(Path.GetExtension(args[0]), ".perfetto-trace", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(Path.GetExtension(args[0]), ".perfetto_trace", StringComparison.OrdinalIgnoreCase) ||
-                    args[0].EndsWith(".perfetto_trace.gz", StringComparison.OrdinalIgnoreCase))
+                else if (IsPerfettoFile(args[0]))
                 {
                     var perfettoTableSource = new Perfetto.PerfettoTraceSource(args[0]);
                     _logViewerWindows.Add(new LogViewerWindow(perfettoTableSource));
@@ -161,8 +168,7 @@ namespace InstantTraceViewerUI
                 {
                     if (ImGui.BeginMenu("Settings"))
                     {
-                        // AppxManifest for MSIX will handle associating the app with all supported file extensions.
-                        if (!Win32Native.IsPackaged)
+                        if (OperatingSystem.IsWindows())
                         {
                             if (ImGui.MenuItem("Associate with .etl extension"))
                             {
@@ -187,15 +193,19 @@ namespace InstantTraceViewerUI
                         FontType font = Settings.Font;
                         if (ImGui.BeginMenu("Font"))
                         {
-                            if (ImGui.MenuItem("Segoe UI", "", font == FontType.SegoeUI))
+                            string primaryUiFontLabel = OperatingSystem.IsMacOS() ? "San Francisco" : "Segoe UI";
+                            string secondaryUiFontLabel = OperatingSystem.IsMacOS() ? "Helvetica Neue" : "Droid Sans";
+                            string monoFontLabel = OperatingSystem.IsMacOS() ? "Menlo (fixed)" : "Cascadia Mono (fixed)";
+
+                            if (ImGui.MenuItem(primaryUiFontLabel, "", font == FontType.SegoeUI))
                             {
                                 Settings.Font = FontType.SegoeUI;
                             }
-                            else if (ImGui.MenuItem("Droid Sans", "", font == FontType.DroidSans))
+                            else if (ImGui.MenuItem(secondaryUiFontLabel, "", font == FontType.DroidSans))
                             {
                                 Settings.Font = FontType.DroidSans;
                             }
-                            else if (ImGui.MenuItem("Cascadia Mono (fixed)", "", font == FontType.CascadiaMono))
+                            else if (ImGui.MenuItem(monoFontLabel, "", font == FontType.CascadiaMono))
                             {
                                 Settings.Font = FontType.CascadiaMono;
                             }
@@ -234,7 +244,7 @@ namespace InstantTraceViewerUI
                 }
 
                 ImGui.SetNextItemShortcut(ImGuiKey.E | ImGuiKey.ModAlt, ImGuiInputFlags.RouteGlobal);
-                if (ImGui.BeginMenu("Etw"))
+                if (OperatingSystem.IsWindows() && ImGui.BeginMenu("Etw"))
                 {
                     if (ImGui.MenuItem("Open WPRP file (real-time)..."))
                     {
@@ -442,7 +452,7 @@ namespace InstantTraceViewerUI
                 }
 
                 ImGui.SetNextItemShortcut(ImGuiKey.A | ImGuiKey.ModAlt, ImGuiInputFlags.RouteGlobal);
-                if (ImGui.BeginMenu("Android"))
+                if (OperatingSystem.IsWindows() && ImGui.BeginMenu("Android"))
                 {
                     if (_adbDevices == null && _adbDevicesException == null)
                     {
@@ -497,7 +507,7 @@ namespace InstantTraceViewerUI
                     if (ImGui.MenuItem($"Open Perfetto capture..."))
                     {
                         // TODO: This blocks the render thread
-                        string file = FileDialog.OpenFile("Perfetto capture file (*.perfetto-trace; *.perfetto_trace; *.perfetto_trace.gz)|*.perfetto-trace;*.perfetto_trace;*.perfetto_trace.gz",
+                        string file = FileDialog.OpenFile("Perfetto capture file (*.perfetto-trace; *.perfetto_trace; *.perfetto_trace.gz; *.pftrace)|*.perfetto-trace;*.perfetto_trace;*.perfetto_trace.gz;*.pftrace",
                             Settings.PerfettoOpenLocation,
                             (s) => Settings.PerfettoOpenLocation = s);
                         if (!string.IsNullOrEmpty(file))
