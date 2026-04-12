@@ -1,9 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
-
-#include <chrono>
-#include <thread>
+#import <QuartzCore/CADisplayLink.h>
 
 #include "imgui.h"
 #include "backends/imgui_impl_metal.h"
@@ -11,7 +9,6 @@
 
 static constexpr CGFloat DefaultWidth = 1200.0;
 static constexpr CGFloat DefaultHeight = 800.0;
-static constexpr auto TargetFrameDuration = std::chrono::milliseconds(16);
 
 static NSWindow* g_window = nil;
 static NSView* g_view = nil;
@@ -22,7 +19,9 @@ static bool g_quitRequested = false;
 static bool g_hasPresentedFrame = false;
 static id<CAMetalDrawable> g_currentDrawable = nil;
 static MTLRenderPassDescriptor* g_currentRenderPassDescriptor = nil;
-static std::chrono::steady_clock::time_point g_nextFrameTime;
+static CADisplayLink* g_displayLink = nil;
+static uint64_t g_displayLinkFrameCounter = 0;
+static uint64_t g_consumedDisplayLinkFrameCounter = 0;
 
 @interface InstantTraceWindowDelegate : NSObject <NSWindowDelegate>
 @end
@@ -60,15 +59,35 @@ static void PumpPendingEvents()
     [NSApp updateWindows];
 }
 
+@interface InstantTraceDisplayLinkTarget : NSObject
+- (void)displayLinkDidFire:(CADisplayLink*)displayLink;
+@end
+
+@implementation InstantTraceDisplayLinkTarget
+- (void)displayLinkDidFire:(CADisplayLink*)displayLink
+{
+    (void)displayLink;
+    ++g_displayLinkFrameCounter;
+}
+@end
+
+static InstantTraceDisplayLinkTarget* g_displayLinkTarget = nil;
+
 static void WaitForNextFrame()
 {
-    auto now = std::chrono::steady_clock::now();
-    if (g_nextFrameTime > now)
+    if (g_displayLink == nil)
     {
-        std::this_thread::sleep_until(g_nextFrameTime);
+        return;
     }
 
-    g_nextFrameTime = std::chrono::steady_clock::now() + TargetFrameDuration;
+    uint64_t targetFrameCounter = g_consumedDisplayLinkFrameCounter + 1;
+    NSRunLoop* runLoop = NSRunLoop.currentRunLoop;
+    while (g_displayLinkFrameCounter < targetFrameCounter && !g_quitRequested)
+    {
+        [runLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate distantFuture]];
+    }
+
+    g_consumedDisplayLinkFrameCounter = g_displayLinkFrameCounter;
 }
 
 extern "C" int WindowInitialize(ImGuiContext** imguiContext) noexcept
@@ -150,6 +169,24 @@ extern "C" int WindowInitialize(ImGuiContext** imguiContext) noexcept
         [g_window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
 
+        if (@available(macOS 14.0, *))
+        {
+            g_displayLinkTarget = [[InstantTraceDisplayLinkTarget alloc] init];
+            g_displayLink = [g_view displayLinkWithTarget:g_displayLinkTarget selector:@selector(displayLinkDidFire:)];
+            if (g_displayLink == nil)
+            {
+                return 1;
+            }
+
+            [g_displayLink addToRunLoop:NSRunLoop.currentRunLoop forMode:NSDefaultRunLoopMode];
+            [g_displayLink addToRunLoop:NSRunLoop.currentRunLoop forMode:NSEventTrackingRunLoopMode];
+            [g_displayLink addToRunLoop:NSRunLoop.currentRunLoop forMode:NSModalPanelRunLoopMode];
+        }
+        else
+        {
+            return 1;
+        }
+
         IMGUI_CHECKVERSION();
         *imguiContext = ImGui::CreateContext();
         ImGuiIO& io = ImGui::GetIO();
@@ -159,8 +196,6 @@ extern "C" int WindowInitialize(ImGuiContext** imguiContext) noexcept
 
         ImGui_ImplOSX_Init(g_view);
         ImGui_ImplMetal_Init(g_device);
-
-        g_nextFrameTime = std::chrono::steady_clock::now();
         return 0;
     }
 }
@@ -185,8 +220,6 @@ extern "C" int WindowBeginNextFrame(int* quit, int* occluded) noexcept
             return 1;
         }
 
-        WaitForNextFrame();
-
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize = ImVec2((float)g_view.bounds.size.width, (float)g_view.bounds.size.height);
 
@@ -207,6 +240,11 @@ extern "C" int WindowBeginNextFrame(int* quit, int* occluded) noexcept
         {
             *occluded = 1;
             return 0;
+        }
+
+        if (g_hasPresentedFrame)
+        {
+            WaitForNextFrame();
         }
 
         g_metalLayer.contentsScale = framebufferScale;
@@ -279,8 +317,17 @@ extern "C" int WindowCleanup() noexcept
         [g_window orderOut:nil];
         g_window.delegate = nil;
 
+        if (g_displayLink != nil)
+        {
+            [g_displayLink invalidate];
+        }
+
         g_currentDrawable = nil;
         g_currentRenderPassDescriptor = nil;
+        g_displayLink = nil;
+        g_displayLinkTarget = nil;
+        g_displayLinkFrameCounter = 0;
+        g_consumedDisplayLinkFrameCounter = 0;
         g_windowDelegate = nil;
         g_metalLayer = nil;
         g_view = nil;
@@ -289,7 +336,6 @@ extern "C" int WindowCleanup() noexcept
         g_device = nil;
         g_quitRequested = false;
         g_hasPresentedFrame = false;
-        g_nextFrameTime = std::chrono::steady_clock::time_point{};
         return 0;
     }
 }
