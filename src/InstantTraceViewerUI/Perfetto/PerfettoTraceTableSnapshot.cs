@@ -42,7 +42,7 @@ namespace InstantTraceViewerUI.Perfetto
             }
             else if (column == PerfettoTraceSource.ColumnSource)
             {
-                return traceRecord.Source.ToString();
+                return !string.IsNullOrEmpty(traceRecord.SourceName) ? traceRecord.SourceName : traceRecord.Source.ToString();
             }
             else if (column == PerfettoTraceSource.ColumnTime)
             {

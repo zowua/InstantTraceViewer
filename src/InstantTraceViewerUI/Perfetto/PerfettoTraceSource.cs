@@ -51,6 +51,15 @@ namespace InstantTraceViewerUI.Perfetto
 
         private Dictionary<uint, Stack<string>> _sliceBeginNames = new Dictionary<uint, Stack<string>>();
 
+        private static string GetTrackEventSourceName(List<string> categories)
+        {
+            string[] uniqueCategories = categories
+                .Where(category => !string.IsNullOrWhiteSpace(category))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            return uniqueCategories.Length > 0 ? string.Join(", ", uniqueCategories) : Source.TrackEvent.ToString();
+        }
+
         public PerfettoTraceSource(string perfettoPath)
         {
             FileStream fileStream = new FileStream(perfettoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -401,6 +410,7 @@ namespace InstantTraceViewerUI.Perfetto
             PerfettoRecord record = new();
             record.Name = name;
             record.Source = Source.TrackEvent;
+            record.SourceName = GetTrackEventSourceName(categories);
             record.Category = packet.TrackEvent.Type switch
             {
                 TrackEvent.Types.Type.SliceBegin => Category.Begin,

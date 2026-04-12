@@ -41,6 +41,7 @@ namespace InstantTraceViewerUI.Perfetto
         public string ThreadName;
         public string Name;
         public Source Source;
+        public string SourceName;
         public Category Category;
         public Priority Priority;
         public DateTime Timestamp;
