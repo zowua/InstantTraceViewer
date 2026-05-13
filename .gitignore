@@ -8,3 +8,6 @@ ARM64/
 *.wapproj.user
 *.csproj.user
 src/InstantTraceViewerMsixPackaging/InstantTraceViewerMsixPackaging.assets.cache
+.tmp-mac-native/
+src/InstantTraceViewerUI/native/
+imgui.ini

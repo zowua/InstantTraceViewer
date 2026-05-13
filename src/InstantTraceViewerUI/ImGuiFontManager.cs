@@ -37,7 +37,10 @@ namespace InstantTraceViewerUI
             ImGui.GetIO().Fonts.Clear();
 
             ImFontAtlasPtr atlas = ImGui.GetIO().Fonts;
-            atlas.SetFontLoader(ImGuiFreeType_GetFontLoader());
+            if (OperatingSystem.IsWindows())
+            {
+                atlas.SetFontLoader(ImGuiFreeType_GetFontLoader());
+            }
 
             FontType font = Settings.Font;
             if (font == FontType.ProggyClean)
@@ -46,16 +49,8 @@ namespace InstantTraceViewerUI
             }
             else
             {
-                string systemFontPath = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
-                string segoeUiPath = Path.Combine(systemFontPath, "segoeui.ttf");
-                string segoeUiVariablePath = Path.Combine(systemFontPath, "SegUIVar.ttf"); // Windows 11 font with better legibility.
-
-                byte[] ttfFontBytes =
-                    font == FontType.SegoeUI && File.Exists(segoeUiVariablePath) ? File.ReadAllBytes(segoeUiVariablePath) :
-                    font == FontType.SegoeUI && File.Exists(segoeUiPath) ? File.ReadAllBytes(segoeUiPath) : // Fallback to old segoe ui font if the new one is not available.
-                    font == FontType.CascadiaMono ? GetEmbeddedResourceBytes("CascadiaMono.ttf") :
-                    GetEmbeddedResourceBytes("DroidSans.ttf");
-                AddFontFromBytes(ReferenceFontSize, ttfFontBytes);
+                byte[] ttfFontBytes = GetPlatformFontBytes(font);
+                AddFontFromBytes(ReferenceFontSize, ttfFontBytes, rasterizerDensity: GetFontRasterizerDensity());
             }
 
             byte[] symbolFont = GetEmbeddedResourceBytes("Font Awesome 6 Free-Solid-900.otf");
@@ -89,7 +84,7 @@ namespace InstantTraceViewerUI
                 0xF31E, // "maximize"
                 0xF53F, // "palette"
                 0xF78C, // "minimize"
-            ]);
+            ], rasterizerDensity: GetFontRasterizerDensity());
         }
 
         public static void FreePinnedFontData()
@@ -105,7 +100,7 @@ namespace InstantTraceViewerUI
         private static float CalcScaledFontSize(float fontSize)
         {
             // ImGui Q&A recommends rounding down font size after applying DPI scaling.
-            return (float)Math.Floor(fontSize * Win32ImGuiHost.GetDpiScale());
+            return (float)Math.Floor(fontSize * ImGuiHost.GetDpiScale());
         }
 
         private static byte[] GetEmbeddedResourceBytes(string resourceName)
@@ -120,7 +115,71 @@ namespace InstantTraceViewerUI
             }
         }
 
-        private static void AddFontFromBytes(float scaledFontSize, byte[] fontData, bool mergeMode = false, ushort[]? glyphRanges = null)
+        private static byte[] GetPlatformFontBytes(FontType font)
+        {
+            if (OperatingSystem.IsMacOS())
+            {
+                return font switch
+                {
+                    FontType.SegoeUI => ReadFirstExistingFont(
+                        "/System/Library/Fonts/SFNS.ttf",
+                        "/System/Library/Fonts/HelveticaNeue.ttc")
+                        ?? GetEmbeddedResourceBytes("DroidSans.ttf"),
+                    FontType.DroidSans => ReadFirstExistingFont(
+                        "/System/Library/Fonts/HelveticaNeue.ttc",
+                        "/System/Library/Fonts/Geneva.ttf")
+                        ?? GetEmbeddedResourceBytes("DroidSans.ttf"),
+                    FontType.CascadiaMono => ReadFirstExistingFont(
+                        "/System/Library/Fonts/Menlo.ttc",
+                        "/System/Library/Fonts/Monaco.ttf",
+                        "/System/Library/Fonts/SFNSMono.ttf")
+                        ?? GetEmbeddedResourceBytes("CascadiaMono.ttf"),
+                    _ => GetEmbeddedResourceBytes("DroidSans.ttf")
+                };
+            }
+
+            if (OperatingSystem.IsWindows())
+            {
+                string systemFontPath = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+                string segoeUiPath = Path.Combine(systemFontPath, "segoeui.ttf");
+                string segoeUiVariablePath = Path.Combine(systemFontPath, "SegUIVar.ttf"); // Windows 11 font with better legibility.
+
+                return
+                    font == FontType.SegoeUI && File.Exists(segoeUiVariablePath) ? File.ReadAllBytes(segoeUiVariablePath) :
+                    font == FontType.SegoeUI && File.Exists(segoeUiPath) ? File.ReadAllBytes(segoeUiPath) :
+                    font == FontType.CascadiaMono ? GetEmbeddedResourceBytes("CascadiaMono.ttf") :
+                    GetEmbeddedResourceBytes("DroidSans.ttf");
+            }
+
+            return
+                font == FontType.CascadiaMono ? GetEmbeddedResourceBytes("CascadiaMono.ttf") :
+                GetEmbeddedResourceBytes("DroidSans.ttf");
+        }
+
+        private static byte[]? ReadFirstExistingFont(params string[] candidates)
+        {
+            foreach (string candidate in candidates)
+            {
+                if (File.Exists(candidate))
+                {
+                    return File.ReadAllBytes(candidate);
+                }
+            }
+
+            return null;
+        }
+
+        private static float GetFontRasterizerDensity()
+        {
+            if (!OperatingSystem.IsMacOS())
+            {
+                return 1.0f;
+            }
+
+            return Math.Max(ImGui.GetIO().DisplayFramebufferScale.X, 1.0f);
+        }
+
+        private static void AddFontFromBytes(float scaledFontSize, byte[] fontData, bool mergeMode = false, ushort[]? glyphRanges = null, float rasterizerDensity = 1.0f)
         {
             // Note this ImVector is leaked but that is OK because ImGui needs the memory kept alive for the lifetime of the font atlas.
             // It's a small amount of memory to leak and only when the user changes font settings.
@@ -139,6 +198,7 @@ namespace InstantTraceViewerUI
             fontCfg.MergeMode = mergeMode;
             fontCfg.FontDataOwnedByAtlas = false;
             fontCfg.GlyphRanges = (uint*)glyphRangesVector.Data;
+            fontCfg.RasterizerDensity = rasterizerDensity;
             GCHandle fontDataHandle = GCHandle.Alloc(fontData, GCHandleType.Pinned);
             s_pinnedFontData.Add(fontDataHandle);
             ImGui.GetIO().Fonts.AddFontFromMemoryTTF((byte*)fontDataHandle.AddrOfPinnedObject(), fontData.Length, scaledFontSize, fontCfg);

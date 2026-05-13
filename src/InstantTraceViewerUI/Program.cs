@@ -6,17 +6,16 @@ namespace InstantTraceViewerUI
     {
         public static unsafe int Main(string[] args)
         {
-            Win32ImGuiHost.WindowInitialize();
-
-            ImGuiContextPtr imguiContext = ImGui.CreateContext();
-            ImGui.SetCurrentContext(imguiContext);
-            Win32ImGuiHost.InitializeImGuiBackends(imguiContext);
+            ImGuiContextPtr imguiContext = ImGuiHost.Initialize();
 
             ImGuiIOPtr io = ImGui.GetIO();
             io.ConfigFlags |= ImGuiConfigFlags.NavEnableKeyboard;
             io.ConfigFlags |= ImGuiConfigFlags.NavEnableGamepad;
             io.ConfigFlags |= ImGuiConfigFlags.DockingEnable;
-            io.ConfigFlags |= ImGuiConfigFlags.ViewportsEnable;
+            if (ImGuiHost.SupportsViewports)
+            {
+                io.ConfigFlags |= ImGuiConfigFlags.ViewportsEnable;
+            }
 
             FontType? lastSetFont = null;
             int? lastSetFontSize = null;
@@ -25,6 +24,7 @@ namespace InstantTraceViewerUI
 
             using (MainWindow mainWindow = new(args))
             {
+                bool exitRequested = false;
                 while (true)
                 {
                     // Font can only change outside of Begin/End frame.
@@ -43,17 +43,17 @@ namespace InstantTraceViewerUI
 
                     if (lastThemeSet != Settings.Theme)
                     {
-                        lastDpiScale = ApplyDpiScaledStyle(Win32ImGuiHost.GetDpiScale());
+                        lastDpiScale = ApplyDpiScaledStyle(ImGuiHost.GetDpiScale());
                         lastThemeSet = Settings.Theme;
                     }
 
-                    float dpiScale = Win32ImGuiHost.GetDpiScale();
+                    float dpiScale = ImGuiHost.GetDpiScale();
                     if (dpiScale != lastDpiScale)
                     {
                         lastDpiScale = ApplyDpiScaledStyle(dpiScale);
                     }
 
-                    Win32ImGuiHost.WindowBeginNextFrame(out bool quit, out bool occluded);
+                    ImGuiHost.WindowBeginNextFrame(out bool quit, out bool occluded);
 
                     if (quit)
                     {
@@ -81,17 +81,20 @@ namespace InstantTraceViewerUI
 
                     if (mainWindow.IsExitRequested)
                     {
-                        break;
+                        exitRequested = true;
                     }
 
-                    Win32ImGuiHost.WindowEndNextFrame();
+                    ImGuiHost.WindowEndNextFrame();
+
+                    if (exitRequested)
+                    {
+                        break;
+                    }
                 }
             }
 
-            Win32ImGuiHost.ShutdownImGuiBackends();
-            ImGui.DestroyContext();
+            ImGuiHost.Shutdown(imguiContext);
             ImGuiFontManager.FreePinnedFontData();
-            Win32ImGuiHost.WindowCleanup();
 
             return 0;
         }

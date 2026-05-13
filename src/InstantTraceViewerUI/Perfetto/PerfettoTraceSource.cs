@@ -1,9 +1,12 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.IO.Compression;
 using System.IO;
 using System.Threading;
 using System.Linq;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using InstantTraceViewer;
 using Google.Protobuf;
 using Perfetto.Protos;
@@ -35,21 +38,36 @@ namespace InstantTraceViewerUI.Perfetto
 
         private static readonly JsonFormatter JsonFormatter = new JsonFormatter(JsonFormatter.Settings.Default.WithIndentation());
 
-        private readonly FileStream _fileStream;
+        private readonly Stream _traceStream;
         private readonly string _displayName;
+        private readonly DateTime? _inferredRealtimeOrigin;
 
         private readonly ReaderWriterLockSlim _traceRecordsLock = new ReaderWriterLockSlim();
         private ListBuilder<PerfettoRecord> _traceRecords = new ListBuilder<PerfettoRecord>();
         private int _generationId = 0;
         private readonly CancellationTokenSource _tokenSource = new CancellationTokenSource();
         private readonly Thread _readThread;
+        private bool _usesRelativeTimestamps = false;
 
-        private Dictionary<uint, Stack<string>> _sliceBeginNames = new Dictionary<uint, Stack<string>>();
+        private Dictionary<uint, Stack<(string Name, string SourceName)>> _sliceBeginEvents = new();
+
+        private static string GetTrackEventSourceName(List<string> categories)
+        {
+            string[] uniqueCategories = categories
+                .Where(category => !string.IsNullOrWhiteSpace(category))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            return uniqueCategories.Length > 0 ? string.Join(", ", uniqueCategories) : Source.TrackEvent.ToString();
+        }
 
         public PerfettoTraceSource(string perfettoPath)
         {
-            _fileStream = new FileStream(perfettoPath, FileMode.Open, FileAccess.Read);
+            FileStream fileStream = new FileStream(perfettoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            _traceStream = perfettoPath.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) ?
+                new GZipStream(fileStream, CompressionMode.Decompress) :
+                fileStream;
             _displayName = Path.GetFileName(perfettoPath);
+            _inferredRealtimeOrigin = TryInferRealtimeOrigin(perfettoPath, out DateTime inferredRealtimeOrigin) ? inferredRealtimeOrigin : null;
 
             _readThread = new Thread(ReadThread);
             _readThread.Start();
@@ -84,6 +102,7 @@ namespace InstantTraceViewerUI.Perfetto
                     RecordSnapshot = _traceRecords.CreateSnapshot(),
                     GenerationId = _generationId,
                     Schema = _schema,
+                    UsesRelativeTimestamps = _usesRelativeTimestamps,
                 };
             }
             finally
@@ -95,18 +114,21 @@ namespace InstantTraceViewerUI.Perfetto
         public void Dispose()
         {
             _tokenSource.Cancel();
+            _traceStream.Dispose();
+            _readThread.Join(TimeSpan.FromSeconds(2));
         }
 
-        private async void ReadThread()
+        private void ReadThread()
         {
             try
             {
                 List<PerfettoRecord> records = new();
 
-                Trace trace = Trace.Parser.ParseFrom(_fileStream);
+                Trace trace = Trace.Parser.ParseFrom(_traceStream);
 
                 var processThreadTracker = new ProcessThreadTracker();
-                var clockSync = new PerfettoClockConverter(trace);
+                var clockSync = new PerfettoClockConverter(trace, _inferredRealtimeOrigin);
+                _usesRelativeTimestamps = clockSync.UsesSyntheticRealtime && !clockSync.InferredRealtimeOrigin.HasValue;
 
                 // First pass: Preprocess packets for process and thread names.
                 foreach (var packet in trace.Packet)
@@ -197,6 +219,14 @@ namespace InstantTraceViewerUI.Perfetto
             {
                 // Trace source is being disposed.
             }
+            catch (ObjectDisposedException) when (_tokenSource.IsCancellationRequested)
+            {
+                // Trace source is being disposed while the parser is reading.
+            }
+            catch (IOException) when (_tokenSource.IsCancellationRequested)
+            {
+                // Trace source is being disposed while the parser is reading.
+            }
             finally
             {
                 IsPreprocessingData = false;
@@ -280,6 +310,40 @@ namespace InstantTraceViewerUI.Perfetto
             }
         }
 
+        private static bool TryInferRealtimeOrigin(string perfettoPath, out DateTime inferredRealtimeOrigin)
+        {
+            string fileNameWithoutExtensions = Path.GetFileNameWithoutExtension(Path.GetFileNameWithoutExtension(perfettoPath));
+            Match fileNameTimestampMatch = Regex.Match(fileNameWithoutExtensions, @"(?<!\d)(\d{8}[-_]\d{6})(?!\d)");
+            if (fileNameTimestampMatch.Success &&
+                DateTime.TryParseExact(
+                    fileNameTimestampMatch.Groups[1].Value,
+                    ["yyyyMMdd-HHmmss", "yyyyMMdd_HHmmss"],
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out DateTime parsedDateTime))
+            {
+                inferredRealtimeOrigin = DateTime.SpecifyKind(parsedDateTime, DateTimeKind.Utc);
+                return true;
+            }
+
+            DateTime creationTime = File.GetCreationTimeUtc(perfettoPath);
+            if (creationTime > DateTime.UnixEpoch)
+            {
+                inferredRealtimeOrigin = creationTime;
+                return true;
+            }
+
+            DateTime lastWriteTime = File.GetLastWriteTimeUtc(perfettoPath);
+            if (lastWriteTime > DateTime.UnixEpoch)
+            {
+                inferredRealtimeOrigin = lastWriteTime;
+                return true;
+            }
+
+            inferredRealtimeOrigin = default;
+            return false;
+        }
+
         private void ProcessTrackEvent(List<PerfettoRecord> records, TracePacket packet, InternedStringManager internedStringManager, ProcessThreadTracker processThreadTracker, PerfettoClockConverter clockConverter)
         {
             // Use the provided non-interned name if available.
@@ -293,39 +357,39 @@ namespace InstantTraceViewerUI.Perfetto
                 name = packet.TrackEvent.Name;
             }
 
+            // I am unsure if these are exclusive but I just combine them.
+            var categories = new List<string>();
+            categories.AddRange(packet.TrackEvent.Categories);
+            categories.AddRange(packet.TrackEvent.CategoryIids.Select(ciid => internedStringManager.GetInternedCategoryName(packet, ciid)));
+            string sourceName = GetTrackEventSourceName(categories);
+
             // Later versions of Perfetto do not store the event name with the SliceEnd. Instead if must be inferred using a stack.
             // TODO: Handle packet.SequenceFlags & SEQ_INCREMENTAL_STATE_CLEARED?
-
             if (!string.IsNullOrEmpty(name) && packet.TrackEvent.Type == TrackEvent.Types.Type.SliceBegin)
             {
-                Stack<string> nameStack = null;
-                if (_sliceBeginNames.TryGetValue(packet.TrustedPacketSequenceId, out nameStack))
+                Stack<(string Name, string SourceName)> nameStack = null;
+                if (_sliceBeginEvents.TryGetValue(packet.TrustedPacketSequenceId, out nameStack))
                 {
-                    nameStack.Push(name);
+                    nameStack.Push((name, sourceName));
                 }
                 else
                 {
-                    nameStack = new Stack<string>(new[] { name });
-                    _sliceBeginNames.Add(packet.TrustedPacketSequenceId, nameStack);
+                    nameStack = new Stack<(string Name, string SourceName)>(new[] { (name, sourceName) });
+                    _sliceBeginEvents.Add(packet.TrustedPacketSequenceId, nameStack);
                 }
             }
             else if (string.IsNullOrEmpty(name) && packet.TrackEvent.Type == TrackEvent.Types.Type.SliceEnd)
             {
-                Stack<string> nameStack = null;
-                if (_sliceBeginNames.TryGetValue(packet.TrustedPacketSequenceId, out nameStack) && nameStack.Count > 0)
+                Stack<(string Name, string SourceName)> nameStack = null;
+                if (_sliceBeginEvents.TryGetValue(packet.TrustedPacketSequenceId, out nameStack) && nameStack.Count > 0)
                 {
-                    name = nameStack.Pop();
+                    (name, sourceName) = nameStack.Pop();
                 }
                 else
                 {
                     name = "!!!MatchingSliceBeginMissing!!!";
                 }
             }
-
-            // I am unsure if these are exclusive but I just combine them.
-            var categories = new List<string>();
-            categories.AddRange(packet.TrackEvent.Categories);
-            categories.AddRange(packet.TrackEvent.CategoryIids.Select(ciid => internedStringManager.GetInternedCategoryName(packet, ciid)));
 
             // See https://github.com/google/perfetto/blob/21753a5bd0877d6b7aac4bea0b593d3f8e55cfef/src/trace_processor/util/debug_annotation_parser.cc
             List<NamedValue> namedValues = new();
@@ -355,6 +419,7 @@ namespace InstantTraceViewerUI.Perfetto
             PerfettoRecord record = new();
             record.Name = name;
             record.Source = Source.TrackEvent;
+            record.SourceName = sourceName;
             record.Category = packet.TrackEvent.Type switch
             {
                 TrackEvent.Types.Type.SliceBegin => Category.Begin,

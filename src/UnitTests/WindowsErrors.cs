@@ -19,6 +19,11 @@ namespace InstantTraceViewerTests
         [TestMethod]
         public void ParseWinError()
         {
+            if (!OperatingSystem.IsWindows())
+            {
+                return;
+            }
+
             string[] winErrorLines = File.ReadAllLines(@"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared\winerror.h");
 
             List<Tuple<uint, string>> hrMap = new();
