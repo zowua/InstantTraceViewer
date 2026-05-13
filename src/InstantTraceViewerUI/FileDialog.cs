@@ -243,20 +243,7 @@ namespace InstantTraceViewerUI
                 "return \"\"\n" +
                 "end try";
 
-            ProcessStartInfo startInfo = new("/usr/bin/osascript")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false
-            };
-            startInfo.ArgumentList.Add("-e");
-            startInfo.ArgumentList.Add(script);
-
-            using Process process = Process.Start(startInfo)!;
-            string output = process.StandardOutput.ReadToEnd().Trim();
-            process.WaitForExit();
-
-            return output == "Replace";
+            return RunAppleScriptCommand(script) == "Replace";
         }
 
         private static void PersistDirectory(string? path, Action<string> persistDirectory)
@@ -296,6 +283,13 @@ namespace InstantTraceViewerUI
                 "return \"\"\n" +
                 "end try";
 
+            string? output = RunAppleScriptCommand(script);
+
+            return string.IsNullOrWhiteSpace(output) ? null : output;
+        }
+
+        private static string? RunAppleScriptCommand(string script)
+        {
             ProcessStartInfo startInfo = new("/usr/bin/osascript")
             {
                 RedirectStandardOutput = true,
@@ -307,9 +301,15 @@ namespace InstantTraceViewerUI
 
             using Process process = Process.Start(startInfo)!;
             string output = process.StandardOutput.ReadToEnd().Trim();
+            string error = process.StandardError.ReadToEnd().Trim();
             process.WaitForExit();
+            if (process.ExitCode != 0)
+            {
+                Debug.WriteLine($"osascript failed with exit code {process.ExitCode}: {error}");
+                return null;
+            }
 
-            return string.IsNullOrWhiteSpace(output) ? null : output;
+            return output;
         }
 
         private static string EscapeAppleScriptString(string value)

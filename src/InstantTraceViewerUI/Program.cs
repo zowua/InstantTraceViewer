@@ -6,95 +6,106 @@ namespace InstantTraceViewerUI
     {
         public static unsafe int Main(string[] args)
         {
-            ImGuiContextPtr imguiContext = ImGuiHost.Initialize();
-
-            ImGuiIOPtr io = ImGui.GetIO();
-            io.ConfigFlags |= ImGuiConfigFlags.NavEnableKeyboard;
-            io.ConfigFlags |= ImGuiConfigFlags.NavEnableGamepad;
-            io.ConfigFlags |= ImGuiConfigFlags.DockingEnable;
-            if (ImGuiHost.SupportsViewports)
+            ImGuiContextPtr imguiContext = default;
+            bool imguiInitialized = false;
+            try
             {
-                io.ConfigFlags |= ImGuiConfigFlags.ViewportsEnable;
-            }
+                imguiContext = ImGuiHost.Initialize();
+                imguiInitialized = true;
 
-            FontType? lastSetFont = null;
-            int? lastSetFontSize = null;
-            ImGuiTheme? lastThemeSet = null;
-            float lastDpiScale = 0;
-
-            using (MainWindow mainWindow = new(args))
-            {
-                bool exitRequested = false;
-                while (true)
+                ImGuiIOPtr io = ImGui.GetIO();
+                io.ConfigFlags |= ImGuiConfigFlags.NavEnableKeyboard;
+                io.ConfigFlags |= ImGuiConfigFlags.NavEnableGamepad;
+                io.ConfigFlags |= ImGuiConfigFlags.DockingEnable;
+                if (ImGuiHost.SupportsViewports)
                 {
-                    // Font can only change outside of Begin/End frame.
-                    if (lastSetFont != Settings.Font)
-                    {
-                        ImGuiFontManager.LoadFontSources();
-                        ImGuiFontManager.ApplyFontSize();
-                        lastSetFont = Settings.Font;
-                        lastSetFontSize = Settings.FontSize;
-                    }
-                    else if (lastSetFontSize != Settings.FontSize)
-                    {
-                        ImGuiFontManager.ApplyFontSize();
-                        lastSetFontSize = Settings.FontSize;
-                    }
+                    io.ConfigFlags |= ImGuiConfigFlags.ViewportsEnable;
+                }
 
-                    if (lastThemeSet != Settings.Theme)
-                    {
-                        lastDpiScale = ApplyDpiScaledStyle(ImGuiHost.GetDpiScale());
-                        lastThemeSet = Settings.Theme;
-                    }
+                FontType? lastSetFont = null;
+                int? lastSetFontSize = null;
+                ImGuiTheme? lastThemeSet = null;
+                float lastDpiScale = 0;
 
-                    float dpiScale = ImGuiHost.GetDpiScale();
-                    if (dpiScale != lastDpiScale)
+                using (MainWindow mainWindow = new(args))
+                {
+                    bool exitRequested = false;
+                    while (true)
                     {
-                        lastDpiScale = ApplyDpiScaledStyle(dpiScale);
-                    }
+                        // Font can only change outside of Begin/End frame.
+                        if (lastSetFont != Settings.Font)
+                        {
+                            ImGuiFontManager.LoadFontSources();
+                            ImGuiFontManager.ApplyFontSize();
+                            lastSetFont = Settings.Font;
+                            lastSetFontSize = Settings.FontSize;
+                        }
+                        else if (lastSetFontSize != Settings.FontSize)
+                        {
+                            ImGuiFontManager.ApplyFontSize();
+                            lastSetFontSize = Settings.FontSize;
+                        }
 
-                    ImGuiHost.WindowBeginNextFrame(out bool quit, out bool occluded);
+                        if (lastThemeSet != Settings.Theme)
+                        {
+                            lastDpiScale = ApplyDpiScaledStyle(ImGuiHost.GetDpiScale());
+                            lastThemeSet = Settings.Theme;
+                        }
 
-                    if (quit)
-                    {
-                        break;
-                    }
+                        float dpiScale = ImGuiHost.GetDpiScale();
+                        if (dpiScale != lastDpiScale)
+                        {
+                            lastDpiScale = ApplyDpiScaledStyle(dpiScale);
+                        }
 
-                    if (occluded)
-                    {
-                        System.Threading.Thread.Sleep(10);
-                        continue;
-                    }
+                        ImGuiHost.WindowBeginNextFrame(out bool quit, out bool occluded);
+
+                        if (quit)
+                        {
+                            break;
+                        }
+
+                        if (occluded)
+                        {
+                            System.Threading.Thread.Sleep(10);
+                            continue;
+                        }
 
 #if PRIMARY_DOCKED_WINDOW
-                    uint dockId = ImGui.DockSpaceOverViewport(0, new ImGuiViewportPtr(nint.Zero), ImGuiDockNodeFlags.NoDockingOverCentralNode | ImGuiDockNodeFlags.AutoHideTabBar);
+                        uint dockId = ImGui.DockSpaceOverViewport(0, new ImGuiViewportPtr(nint.Zero), ImGuiDockNodeFlags.NoDockingOverCentralNode | ImGuiDockNodeFlags.AutoHideTabBar);
 
-                    // Force the next window to be docked.
-                    ImGui.SetNextWindowDockID(dockId);
-                    ImGuiWindowFlags flags = ImGuiWindowFlags.NoBringToFrontOnFocus | ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoSavedSettings;
-                    if (ImGui.Begin("Window", flags))
-                    {
-                        ImGui.TextUnformatted("Hello World");
-                    }
+                        // Force the next window to be docked.
+                        ImGui.SetNextWindowDockID(dockId);
+                        ImGuiWindowFlags flags = ImGuiWindowFlags.NoBringToFrontOnFocus | ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoSavedSettings;
+                        if (ImGui.Begin("Window", flags))
+                        {
+                            ImGui.TextUnformatted("Hello World");
+                        }
 #endif
-                    mainWindow.Draw();
+                        mainWindow.Draw();
 
-                    if (mainWindow.IsExitRequested)
-                    {
-                        exitRequested = true;
-                    }
+                        if (mainWindow.IsExitRequested)
+                        {
+                            exitRequested = true;
+                        }
 
-                    ImGuiHost.WindowEndNextFrame();
+                        ImGuiHost.WindowEndNextFrame();
 
-                    if (exitRequested)
-                    {
-                        break;
+                        if (exitRequested)
+                        {
+                            break;
+                        }
                     }
                 }
             }
-
-            ImGuiHost.Shutdown(imguiContext);
-            ImGuiFontManager.FreePinnedFontData();
+            finally
+            {
+                if (imguiInitialized)
+                {
+                    ImGuiHost.Shutdown(imguiContext);
+                }
+                ImGuiFontManager.FreePinnedFontData();
+            }
 
             return 0;
         }

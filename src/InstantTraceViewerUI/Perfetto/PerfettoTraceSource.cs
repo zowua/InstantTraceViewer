@@ -5,8 +5,6 @@ using System.IO;
 using System.Threading;
 using System.Linq;
 using System.Collections.Generic;
-using System.Globalization;
-using System.Text.RegularExpressions;
 using InstantTraceViewer;
 using Google.Protobuf;
 using Perfetto.Protos;
@@ -40,7 +38,6 @@ namespace InstantTraceViewerUI.Perfetto
 
         private readonly Stream _traceStream;
         private readonly string _displayName;
-        private readonly DateTime? _inferredRealtimeOrigin;
 
         private readonly ReaderWriterLockSlim _traceRecordsLock = new ReaderWriterLockSlim();
         private ListBuilder<PerfettoRecord> _traceRecords = new ListBuilder<PerfettoRecord>();
@@ -49,9 +46,17 @@ namespace InstantTraceViewerUI.Perfetto
         private readonly Thread _readThread;
         private bool _usesRelativeTimestamps = false;
 
-        private Dictionary<uint, Stack<(string Name, string SourceName)>> _sliceBeginEvents = new();
+        private sealed class PacketSequenceState
+        {
+            public uint? TimestampClockId;
+            public ulong? TrackUuid;
+            public bool IncrementalStateValid = true;
+        }
 
-        private static string GetTrackEventSourceName(List<string> categories)
+        private readonly Dictionary<uint, PacketSequenceState> _packetSequenceStates = new();
+        private readonly Dictionary<(uint SequenceId, ulong TrackUuid), Stack<(string Name, string SourceName)>> _sliceBeginEvents = new();
+
+        private static string GetTrackEventSourceName(IEnumerable<string> categories)
         {
             string[] uniqueCategories = categories
                 .Where(category => !string.IsNullOrWhiteSpace(category))
@@ -67,9 +72,12 @@ namespace InstantTraceViewerUI.Perfetto
                 new GZipStream(fileStream, CompressionMode.Decompress) :
                 fileStream;
             _displayName = Path.GetFileName(perfettoPath);
-            _inferredRealtimeOrigin = TryInferRealtimeOrigin(perfettoPath, out DateTime inferredRealtimeOrigin) ? inferredRealtimeOrigin : null;
 
-            _readThread = new Thread(ReadThread);
+            _readThread = new Thread(ReadThread)
+            {
+                IsBackground = true,
+                Name = "Perfetto trace parser"
+            };
             _readThread.Start();
         }
 
@@ -127,11 +135,11 @@ namespace InstantTraceViewerUI.Perfetto
                 Trace trace = Trace.Parser.ParseFrom(_traceStream);
 
                 var processThreadTracker = new ProcessThreadTracker();
-                var clockSync = new PerfettoClockConverter(trace, _inferredRealtimeOrigin);
-                _usesRelativeTimestamps = clockSync.UsesSyntheticRealtime && !clockSync.InferredRealtimeOrigin.HasValue;
+                var clockSync = new PerfettoClockConverter(trace);
+                _usesRelativeTimestamps = clockSync.UsesSyntheticRealtime;
 
                 // First pass: Preprocess packets for process and thread names.
-                foreach (var packet in trace.Packet)
+                foreach (var packet in EnumeratePacketsWithValidIncrementalState(trace.Packet))
                 {
                     _tokenSource.Token.ThrowIfCancellationRequested();
                     processThreadTracker.ProcessPacket(packet);
@@ -141,6 +149,10 @@ namespace InstantTraceViewerUI.Perfetto
                 foreach (var packet in trace.Packet)
                 {
                     _tokenSource.Token.ThrowIfCancellationRequested();
+                    if (!PreparePacketSequenceStateForPacket(packet))
+                    {
+                        continue;
+                    }
 
                     // Interned strings may be reset or overridden and so the interned string manager can't be precomputed.
                     // It must be used as it is consuming packets.
@@ -153,7 +165,7 @@ namespace InstantTraceViewerUI.Perfetto
                         record.Name = "SystemInfo";
                         record.Priority = Priority.Info;
                         record.NamedValues = [new NamedValue { Name = null, Value = JsonFormatter.Format(packet.SystemInfo) }];
-                        record.Timestamp = clockSync.GetPacketRealtimeTimestamp(packet);
+                        record.Timestamp = clockSync.GetPacketRealtimeTimestamp(packet, GetDefaultTimestampClockId(packet));
                         records.Add(record);
                     }
                     else if (packet.TraceConfig != null)
@@ -163,7 +175,7 @@ namespace InstantTraceViewerUI.Perfetto
                         record.Name = "TraceConfig";
                         record.Priority = Priority.Info;
                         record.NamedValues = [new NamedValue { Name = null, Value = JsonFormatter.Format(packet.TraceConfig) }];
-                        record.Timestamp = clockSync.GetPacketRealtimeTimestamp(packet);
+                        record.Timestamp = clockSync.GetPacketRealtimeTimestamp(packet, GetDefaultTimestampClockId(packet));
                         records.Add(record);
                     }
                     else if (packet.ProcessTree != null)
@@ -193,27 +205,20 @@ namespace InstantTraceViewerUI.Perfetto
                         // > This is used to be able to efficiently partition long traces without having to fully parse them.
                         // But I am seeing FTrace events that come out of sequence across synchronization markers.
                     }
+
+                    UpdatePacketSequenceStateAfterPacket(packet);
                 }
 
+                _tokenSource.Token.ThrowIfCancellationRequested();
                 ProcessFTrace(records, trace, clockSync, processThreadTracker);
 
                 // All events have been added and now they can be sorted.
+                _tokenSource.Token.ThrowIfCancellationRequested();
                 records.Sort((left, right) =>
                     (left.Timestamp < right.Timestamp) ? -1 :
                     (left.Timestamp > right.Timestamp) ? 1 : 0);
 
-                _traceRecordsLock.EnterWriteLock();
-                try
-                {
-                    foreach (var record in records)
-                    {
-                        _traceRecords.Add(record);
-                    }
-                }
-                finally
-                {
-                    _traceRecordsLock.ExitWriteLock();
-                }
+                PublishRecords(records);
             }
             catch (OperationCanceledException)
             {
@@ -227,10 +232,46 @@ namespace InstantTraceViewerUI.Perfetto
             {
                 // Trace source is being disposed while the parser is reading.
             }
+            catch (Exception ex)
+            {
+                if (!_tokenSource.IsCancellationRequested)
+                {
+                    PublishRecords([CreateParserErrorRecord(ex)]);
+                }
+            }
             finally
             {
                 IsPreprocessingData = false;
             }
+        }
+
+        private void PublishRecords(IEnumerable<PerfettoRecord> records)
+        {
+            _traceRecordsLock.EnterWriteLock();
+            try
+            {
+                foreach (var record in records)
+                {
+                    _traceRecords.Add(record);
+                }
+            }
+            finally
+            {
+                _traceRecordsLock.ExitWriteLock();
+            }
+        }
+
+        private static PerfettoRecord CreateParserErrorRecord(Exception ex)
+        {
+            return new PerfettoRecord
+            {
+                Source = Source.Metadata,
+                SourceName = "Perfetto parser",
+                Name = "Failed to process trace",
+                Priority = Priority.Error,
+                Timestamp = DateTime.UnixEpoch,
+                NamedValues = [new NamedValue("Error", ex.Message), new NamedValue("Type", ex.GetType().Name)]
+            };
         }
 
         private void ProcessFTrace(List<PerfettoRecord> records, Trace trace, PerfettoClockConverter clockSync, ProcessThreadTracker processThreadTracker)
@@ -310,40 +351,6 @@ namespace InstantTraceViewerUI.Perfetto
             }
         }
 
-        private static bool TryInferRealtimeOrigin(string perfettoPath, out DateTime inferredRealtimeOrigin)
-        {
-            string fileNameWithoutExtensions = Path.GetFileNameWithoutExtension(Path.GetFileNameWithoutExtension(perfettoPath));
-            Match fileNameTimestampMatch = Regex.Match(fileNameWithoutExtensions, @"(?<!\d)(\d{8}[-_]\d{6})(?!\d)");
-            if (fileNameTimestampMatch.Success &&
-                DateTime.TryParseExact(
-                    fileNameTimestampMatch.Groups[1].Value,
-                    ["yyyyMMdd-HHmmss", "yyyyMMdd_HHmmss"],
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.None,
-                    out DateTime parsedDateTime))
-            {
-                inferredRealtimeOrigin = DateTime.SpecifyKind(parsedDateTime, DateTimeKind.Utc);
-                return true;
-            }
-
-            DateTime creationTime = File.GetCreationTimeUtc(perfettoPath);
-            if (creationTime > DateTime.UnixEpoch)
-            {
-                inferredRealtimeOrigin = creationTime;
-                return true;
-            }
-
-            DateTime lastWriteTime = File.GetLastWriteTimeUtc(perfettoPath);
-            if (lastWriteTime > DateTime.UnixEpoch)
-            {
-                inferredRealtimeOrigin = lastWriteTime;
-                return true;
-            }
-
-            inferredRealtimeOrigin = default;
-            return false;
-        }
-
         private void ProcessTrackEvent(List<PerfettoRecord> records, TracePacket packet, InternedStringManager internedStringManager, ProcessThreadTracker processThreadTracker, PerfettoClockConverter clockConverter)
         {
             // Use the provided non-interned name if available.
@@ -362,30 +369,39 @@ namespace InstantTraceViewerUI.Perfetto
             categories.AddRange(packet.TrackEvent.Categories);
             categories.AddRange(packet.TrackEvent.CategoryIids.Select(ciid => internedStringManager.GetInternedCategoryName(packet, ciid)));
             string sourceName = GetTrackEventSourceName(categories);
+            (uint SequenceId, ulong TrackUuid) sliceStackKey = GetSliceStackKey(packet, GetDefaultTrackUuid(packet));
 
             // Later versions of Perfetto do not store the event name with the SliceEnd. Instead if must be inferred using a stack.
-            // TODO: Handle packet.SequenceFlags & SEQ_INCREMENTAL_STATE_CLEARED?
             if (!string.IsNullOrEmpty(name) && packet.TrackEvent.Type == TrackEvent.Types.Type.SliceBegin)
             {
                 Stack<(string Name, string SourceName)> nameStack = null;
-                if (_sliceBeginEvents.TryGetValue(packet.TrustedPacketSequenceId, out nameStack))
+                if (_sliceBeginEvents.TryGetValue(sliceStackKey, out nameStack))
                 {
                     nameStack.Push((name, sourceName));
                 }
                 else
                 {
                     nameStack = new Stack<(string Name, string SourceName)>(new[] { (name, sourceName) });
-                    _sliceBeginEvents.Add(packet.TrustedPacketSequenceId, nameStack);
+                    _sliceBeginEvents.Add(sliceStackKey, nameStack);
                 }
             }
-            else if (string.IsNullOrEmpty(name) && packet.TrackEvent.Type == TrackEvent.Types.Type.SliceEnd)
+            else if (packet.TrackEvent.Type == TrackEvent.Types.Type.SliceEnd)
             {
                 Stack<(string Name, string SourceName)> nameStack = null;
-                if (_sliceBeginEvents.TryGetValue(packet.TrustedPacketSequenceId, out nameStack) && nameStack.Count > 0)
+                if (_sliceBeginEvents.TryGetValue(sliceStackKey, out nameStack) && nameStack.Count > 0)
                 {
-                    (name, sourceName) = nameStack.Pop();
+                    (string beginName, string beginSourceName) = nameStack.Pop();
+                    if (string.IsNullOrEmpty(name))
+                    {
+                        name = beginName;
+                    }
+
+                    if (sourceName == Source.TrackEvent.ToString())
+                    {
+                        sourceName = beginSourceName;
+                    }
                 }
-                else
+                else if (string.IsNullOrEmpty(name))
                 {
                     name = "!!!MatchingSliceBeginMissing!!!";
                 }
@@ -413,8 +429,8 @@ namespace InstantTraceViewerUI.Perfetto
                 namedValues.Add(new NamedValue(debugAnnotationName, debugAnnotationValue));
             }
 
-            ProcessThreadTracker.ThreadData threadData = processThreadTracker.GetThreadData(packet);
-            ProcessThreadTracker.ProcessData processData = processThreadTracker.GetProcessData(packet, threadData);
+            ProcessThreadTracker.ThreadData? threadData = processThreadTracker.GetThreadData(packet, GetDefaultTrackUuid(packet));
+            ProcessThreadTracker.ProcessData? processData = processThreadTracker.GetProcessData(packet, threadData, GetDefaultTrackUuid(packet));
 
             PerfettoRecord record = new();
             record.Name = name;
@@ -431,7 +447,7 @@ namespace InstantTraceViewerUI.Perfetto
             record.ThreadName = threadData?.Name;
             record.Pid = processData?.Pid ?? threadData?.Pid ?? 0;
             record.Tid = threadData?.Tid ?? 0;
-            record.Timestamp = clockConverter.GetPacketRealtimeTimestamp(packet);
+            record.Timestamp = clockConverter.GetPacketRealtimeTimestamp(packet, GetDefaultTimestampClockId(packet));
             record.NamedValues = namedValues.ToArray();
             records.Add(record);
         }
@@ -530,8 +546,9 @@ namespace InstantTraceViewerUI.Perfetto
                     AndroidLogId.LidStats => Source.LogcatStats,
                     AndroidLogId.LidSecurity => Source.LogcatSecurity,
                     AndroidLogId.LidKernel => Source.LogcatKernel,
-                    _ => throw new NotImplementedException($"Unknown AndroidLogId: {evt.LogId}"),
+                    _ => Source.LogcatDefault,
                 };
+                record.SourceName = IsKnownAndroidLogId(evt.LogId) ? string.Empty : evt.LogId.ToString();
                 record.Priority = evt.Prio switch
                 {
                     AndroidLogPriority.PrioVerbose => Priority.Verbose,
@@ -540,7 +557,7 @@ namespace InstantTraceViewerUI.Perfetto
                     AndroidLogPriority.PrioWarn => Priority.Warning,
                     AndroidLogPriority.PrioError => Priority.Error,
                     AndroidLogPriority.PrioFatal => Priority.Fatal,
-                    _ => throw new NotImplementedException($"Unknown AndroidLogPriority: {evt.Prio}"),
+                    _ => Priority.Info,
                 };
                 record.Pid = pid;
                 record.Tid = tid;
@@ -553,6 +570,140 @@ namespace InstantTraceViewerUI.Perfetto
 
                 records.Add(record);
             }
+        }
+
+        private uint? GetDefaultTimestampClockId(TracePacket packet)
+        {
+            return _packetSequenceStates.TryGetValue(packet.TrustedPacketSequenceId, out PacketSequenceState? state) && state.IncrementalStateValid ? state.TimestampClockId : null;
+        }
+
+        private ulong? GetDefaultTrackUuid(TracePacket packet)
+        {
+            return _packetSequenceStates.TryGetValue(packet.TrustedPacketSequenceId, out PacketSequenceState? state) && state.IncrementalStateValid ? state.TrackUuid : null;
+        }
+
+        private bool PreparePacketSequenceStateForPacket(TracePacket packet)
+        {
+            uint sequenceId = packet.TrustedPacketSequenceId;
+            if (packet.FirstPacketOnSequence)
+            {
+                ResetPacketSequenceState(sequenceId, incrementalStateValid: true, clearSliceStacks: true);
+                return true;
+            }
+
+            if (PerfettoSequenceState.IsCleanStateCleared(packet))
+            {
+                ResetPacketSequenceState(sequenceId, incrementalStateValid: true, clearSliceStacks: false);
+                return true;
+            }
+
+            if (packet.PreviousPacketDropped)
+            {
+                ResetPacketSequenceState(sequenceId, incrementalStateValid: false, clearSliceStacks: true);
+                return false;
+            }
+
+            if (!_packetSequenceStates.TryGetValue(sequenceId, out PacketSequenceState? state))
+            {
+                state = new PacketSequenceState();
+                _packetSequenceStates.Add(sequenceId, state);
+            }
+
+            return state.IncrementalStateValid;
+        }
+
+        private void ResetPacketSequenceState(uint sequenceId, bool incrementalStateValid, bool clearSliceStacks)
+        {
+            _packetSequenceStates[sequenceId] = new PacketSequenceState
+            {
+                IncrementalStateValid = incrementalStateValid
+            };
+
+            if (!clearSliceStacks)
+            {
+                return;
+            }
+
+            foreach ((uint SequenceId, ulong TrackUuid) key in _sliceBeginEvents.Keys.Where(key => key.SequenceId == sequenceId).ToArray())
+            {
+                _sliceBeginEvents.Remove(key);
+            }
+        }
+
+        private void UpdatePacketSequenceStateAfterPacket(TracePacket packet)
+        {
+            if (!_packetSequenceStates.TryGetValue(packet.TrustedPacketSequenceId, out PacketSequenceState? state))
+            {
+                state = new PacketSequenceState();
+                _packetSequenceStates.Add(packet.TrustedPacketSequenceId, state);
+            }
+
+            if (!state.IncrementalStateValid)
+            {
+                return;
+            }
+
+            TracePacketDefaults? defaults = packet.TracePacketDefaults;
+            if (defaults == null)
+            {
+                return;
+            }
+
+            if (defaults.HasTimestampClockId)
+            {
+                state.TimestampClockId = defaults.TimestampClockId;
+            }
+
+            if (defaults.TrackEventDefaults?.HasTrackUuid ?? false)
+            {
+                state.TrackUuid = defaults.TrackEventDefaults.TrackUuid;
+            }
+        }
+
+        private static ulong GetEffectiveTrackUuid(TracePacket packet, ulong? defaultTrackUuid)
+        {
+            return packet.TrackEvent.HasTrackUuid ? packet.TrackEvent.TrackUuid : defaultTrackUuid ?? 0;
+        }
+
+        private static (uint SequenceId, ulong TrackUuid) GetSliceStackKey(TracePacket packet, ulong? defaultTrackUuid)
+        {
+            return (packet.TrustedPacketSequenceId, GetEffectiveTrackUuid(packet, defaultTrackUuid));
+        }
+
+        private static IEnumerable<TracePacket> EnumeratePacketsWithValidIncrementalState(IEnumerable<TracePacket> packets)
+        {
+            HashSet<uint> invalidSequences = new();
+            foreach (TracePacket packet in packets)
+            {
+                uint sequenceId = packet.TrustedPacketSequenceId;
+                if (packet.FirstPacketOnSequence || PerfettoSequenceState.IsCleanStateCleared(packet))
+                {
+                    invalidSequences.Remove(sequenceId);
+                }
+                else if (packet.PreviousPacketDropped)
+                {
+                    invalidSequences.Add(sequenceId);
+                    continue;
+                }
+
+                if (!invalidSequences.Contains(sequenceId))
+                {
+                    yield return packet;
+                }
+            }
+        }
+
+        private static bool IsKnownAndroidLogId(AndroidLogId logId)
+        {
+            return logId is
+                AndroidLogId.LidDefault or
+                AndroidLogId.LidRadio or
+                AndroidLogId.LidEvents or
+                AndroidLogId.LidSystem or
+                AndroidLogId.LidCrash or
+                AndroidLogId.LidStats or
+                AndroidLogId.LidSecurity or
+                AndroidLogId.LidKernel;
         }
     }
 }

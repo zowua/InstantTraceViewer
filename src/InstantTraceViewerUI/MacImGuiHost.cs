@@ -6,10 +6,13 @@ namespace InstantTraceViewerUI
 {
     internal static unsafe class MacImGuiHost
     {
+        private const string NativeLibraryName = "InstantTraceViewerNative";
+
         public static ImGuiContextPtr Initialize()
         {
             if (WindowInitialize(out nint rawContext) != 0)
             {
+                NativeWindowCleanup();
                 throw new InvalidOperationException("Failed to initialize macOS ImGui host.");
             }
 
@@ -45,16 +48,16 @@ namespace InstantTraceViewerUI
             }
         }
 
-        [DllImport("InstantTraceViewerNative", CallingConvention = CallingConvention.Winapi)]
+        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Winapi)]
         private static extern int WindowInitialize(out nint imguiContext);
 
-        [DllImport("InstantTraceViewerNative", CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowBeginNextFrame")]
+        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowBeginNextFrame")]
         private static extern int NativeWindowBeginNextFrame(out int quit, out int occluded);
 
-        [DllImport("InstantTraceViewerNative", CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowEndNextFrame")]
+        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowEndNextFrame")]
         private static extern int NativeWindowEndNextFrame();
 
-        [DllImport("InstantTraceViewerNative", CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowCleanup")]
+        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowCleanup")]
         private static extern int NativeWindowCleanup();
     }
 }

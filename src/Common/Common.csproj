@@ -4,15 +4,23 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>annotations</Nullable>
     <RootNamespace>InstantTraceViewer</RootNamespace>
+    <MacTargetFramework>net8.0</MacTargetFramework>
+    <WindowsTargetFramework>net10.0</WindowsTargetFramework>
+    <BuildTargetPlatform Condition="'$(BuildTargetPlatform)' == '' and ('$(RuntimeIdentifier)' == 'osx-arm64' or '$(RuntimeIdentifier)' == 'osx-x64')">macos</BuildTargetPlatform>
+    <BuildTargetPlatform Condition="'$(BuildTargetPlatform)' == '' and ('$(RuntimeIdentifier)' == 'win-x64' or '$(RuntimeIdentifier)' == 'win-arm64')">windows</BuildTargetPlatform>
+    <BuildTargetPlatform Condition="'$(BuildTargetPlatform)' == '' and '$(TargetFramework)' == '$(MacTargetFramework)'">macos</BuildTargetPlatform>
+    <BuildTargetPlatform Condition="'$(BuildTargetPlatform)' == '' and '$(TargetFramework)' == '$(WindowsTargetFramework)'">windows</BuildTargetPlatform>
+    <BuildTargetPlatform Condition="'$(BuildTargetPlatform)' == '' and '$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">macos</BuildTargetPlatform>
+    <BuildTargetPlatform Condition="'$(BuildTargetPlatform)' == ''">windows</BuildTargetPlatform>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">
-    <TargetFramework>net8.0</TargetFramework>
+  <PropertyGroup Condition="'$(BuildTargetPlatform)' == 'macos'">
+    <TargetFramework Condition="'$(TargetFramework)' == ''">$(MacTargetFramework)</TargetFramework>
     <RuntimeIdentifiers>osx-arm64;osx-x64</RuntimeIdentifiers>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' != 'true'">
-    <TargetFramework>net10.0</TargetFramework>
+  <PropertyGroup Condition="'$(BuildTargetPlatform)' == 'windows'">
+    <TargetFramework Condition="'$(TargetFramework)' == ''">$(WindowsTargetFramework)</TargetFramework>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
   </PropertyGroup>
 

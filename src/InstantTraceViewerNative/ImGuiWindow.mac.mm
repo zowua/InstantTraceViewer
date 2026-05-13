@@ -22,6 +22,9 @@ static MTLRenderPassDescriptor* g_currentRenderPassDescriptor = nil;
 static CADisplayLink* g_displayLink = nil;
 static uint64_t g_displayLinkFrameCounter = 0;
 static uint64_t g_consumedDisplayLinkFrameCounter = 0;
+static bool g_imguiContextCreated = false;
+static bool g_osxBackendInitialized = false;
+static bool g_metalBackendInitialized = false;
 
 @interface InstantTraceWindowDelegate : NSObject <NSWindowDelegate>
 @end
@@ -73,6 +76,14 @@ static void PumpPendingEvents()
 
 static InstantTraceDisplayLinkTarget* g_displayLinkTarget = nil;
 
+extern "C" int WindowCleanup() noexcept;
+
+static int FailInitialize() noexcept
+{
+    WindowCleanup();
+    return 1;
+}
+
 static void WaitForNextFrame()
 {
     if (g_displayLink == nil)
@@ -106,13 +117,13 @@ extern "C" int WindowInitialize(ImGuiContext** imguiContext) noexcept
         g_device = MTLCreateSystemDefaultDevice();
         if (g_device == nil)
         {
-            return 1;
+            return FailInitialize();
         }
 
         g_commandQueue = [g_device newCommandQueue];
         if (g_commandQueue == nil)
         {
-            return 1;
+            return FailInitialize();
         }
 
         NSRect frame = NSMakeRect(100.0, 100.0, DefaultWidth, DefaultHeight);
@@ -128,7 +139,7 @@ extern "C" int WindowInitialize(ImGuiContext** imguiContext) noexcept
                                                    defer:NO];
         if (g_window == nil)
         {
-            return 1;
+            return FailInitialize();
         }
 
         g_window.title = @"Instant Trace Viewer";
@@ -139,7 +150,7 @@ extern "C" int WindowInitialize(ImGuiContext** imguiContext) noexcept
         g_view = [[NSView alloc] initWithFrame:frame];
         if (g_view == nil)
         {
-            return 1;
+            return FailInitialize();
         }
 
         g_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -148,7 +159,7 @@ extern "C" int WindowInitialize(ImGuiContext** imguiContext) noexcept
         g_metalLayer = [CAMetalLayer layer];
         if (g_metalLayer == nil)
         {
-            return 1;
+            return FailInitialize();
         }
 
         g_metalLayer.device = g_device;
@@ -161,7 +172,7 @@ extern "C" int WindowInitialize(ImGuiContext** imguiContext) noexcept
         g_currentRenderPassDescriptor = [MTLRenderPassDescriptor new];
         if (g_currentRenderPassDescriptor == nil)
         {
-            return 1;
+            return FailInitialize();
         }
 
         g_window.contentView = g_view;
@@ -175,7 +186,7 @@ extern "C" int WindowInitialize(ImGuiContext** imguiContext) noexcept
             g_displayLink = [g_view displayLinkWithTarget:g_displayLinkTarget selector:@selector(displayLinkDidFire:)];
             if (g_displayLink == nil)
             {
-                return 1;
+                return FailInitialize();
             }
 
             [g_displayLink addToRunLoop:NSRunLoop.currentRunLoop forMode:NSDefaultRunLoopMode];
@@ -188,9 +199,23 @@ extern "C" int WindowInitialize(ImGuiContext** imguiContext) noexcept
         }
 
         *imguiContext = ImGui::CreateContext();
+        if (*imguiContext == nullptr)
+        {
+            return FailInitialize();
+        }
+        g_imguiContextCreated = true;
 
-        ImGui_ImplOSX_Init(g_view);
-        ImGui_ImplMetal_Init(g_device);
+        if (!ImGui_ImplOSX_Init(g_view))
+        {
+            return FailInitialize();
+        }
+        g_osxBackendInitialized = true;
+
+        if (!ImGui_ImplMetal_Init(g_device))
+        {
+            return FailInitialize();
+        }
+        g_metalBackendInitialized = true;
         return 0;
     }
 }
@@ -305,12 +330,26 @@ extern "C" int WindowCleanup() noexcept
 {
     @autoreleasepool
     {
-        ImGui_ImplMetal_Shutdown();
-        ImGui_ImplOSX_Shutdown();
-        ImGui::DestroyContext();
+        if (g_metalBackendInitialized)
+        {
+            ImGui_ImplMetal_Shutdown();
+        }
 
-        [g_window orderOut:nil];
-        g_window.delegate = nil;
+        if (g_osxBackendInitialized)
+        {
+            ImGui_ImplOSX_Shutdown();
+        }
+
+        if (g_imguiContextCreated && ImGui::GetCurrentContext() != nullptr)
+        {
+            ImGui::DestroyContext();
+        }
+
+        if (g_window != nil)
+        {
+            [g_window orderOut:nil];
+            g_window.delegate = nil;
+        }
 
         if (g_displayLink != nil)
         {
@@ -331,6 +370,9 @@ extern "C" int WindowCleanup() noexcept
         g_device = nil;
         g_quitRequested = false;
         g_hasPresentedFrame = false;
+        g_imguiContextCreated = false;
+        g_osxBackendInitialized = false;
+        g_metalBackendInitialized = false;
         return 0;
     }
 }

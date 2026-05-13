@@ -3,7 +3,8 @@ using System;
 
 namespace InstantTraceViewerUI.Perfetto
 {
-    internal enum Source {
+    internal enum Source
+    {
         Metadata,
 
         TrackEvent,
@@ -16,10 +17,12 @@ namespace InstantTraceViewerUI.Perfetto
         LogcatStats,
         LogcatSecurity,
         LogcatKernel,
-    };
+    }
 
-    internal enum Category { 
-        None,Begin,
+    internal enum Category
+    {
+        None,
+        Begin,
         End,
     }
 

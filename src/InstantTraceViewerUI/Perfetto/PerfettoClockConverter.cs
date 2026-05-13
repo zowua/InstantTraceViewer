@@ -20,14 +20,15 @@ namespace InstantTraceViewerUI.Perfetto
                 .DefaultIfEmpty(BuiltinClock.Boottime)
                 .First();
 
-            var bootTimestamps = trace.Packet
-                .Where(p => p.HasTimestamp && (p.TimestampClockId == (int)BuiltinClock.Boottime || p.TimestampClockId == 0 /* 0 indicates default which is boottime */))
+            var packetTimestamps = GetPacketTimestamps(trace).ToArray();
+
+            var bootTimestamps = packetTimestamps
+                .Where(p => p.ClockId == BuiltinClock.Boottime)
                 .Select(p => p.Timestamp);
             EarliestBootTimestamp = bootTimestamps.DefaultIfEmpty().Min();
 
-            EarliestTimestampByClock = trace.Packet
-                .Where(p => p.HasTimestamp)
-                .GroupBy(p => NormalizeClockId(p.HasTimestampClockId ? (BuiltinClock)p.TimestampClockId : BuiltinClock.Boottime))
+            EarliestTimestampByClock = packetTimestamps
+                .GroupBy(p => NormalizeClockId(p.ClockId))
                 .ToDictionary(g => g.Key, g => g.Min(p => p.Timestamp));
 
             foreach (var clock in ClockSnapshots
@@ -74,7 +75,7 @@ namespace InstantTraceViewerUI.Perfetto
             return fromTimestamp;
         }
 
-        public DateTime GetPacketRealtimeTimestamp(TracePacket packet)
+        public DateTime GetPacketRealtimeTimestamp(TracePacket packet, uint? defaultTimestampClockId = null)
         {
             // Some packets like SystemInfo and TraceConfig do not have a timestamp so they will show at the top with the earliest timestamp.
             if (!packet.HasTimestamp)
@@ -82,7 +83,7 @@ namespace InstantTraceViewerUI.Perfetto
                 return RealTimeClockToDateTime(ConvertTimestamp(BuiltinClock.Boottime, BuiltinClock.Realtime, EarliestBootTimestamp));
             }
 
-            BuiltinClock fromClock = packet.HasTimestampClockId ? (BuiltinClock)packet.TimestampClockId : BuiltinClock.Boottime;
+            BuiltinClock fromClock = GetPacketTimestampClock(packet, defaultTimestampClockId);
             return RealTimeClockToDateTime(ConvertTimestamp(fromClock, BuiltinClock.Realtime, packet.Timestamp));
         }
 
@@ -140,6 +141,50 @@ namespace InstantTraceViewerUI.Perfetto
             }
 
             return 0;
+        }
+
+        private static IEnumerable<(BuiltinClock ClockId, ulong Timestamp)> GetPacketTimestamps(Trace trace)
+        {
+            Dictionary<uint, uint> defaultTimestampClockIdBySequence = new();
+            HashSet<uint> invalidSequences = new();
+            foreach (TracePacket packet in trace.Packet)
+            {
+                uint sequenceId = packet.TrustedPacketSequenceId;
+                if (packet.FirstPacketOnSequence || PerfettoSequenceState.IsCleanStateCleared(packet))
+                {
+                    defaultTimestampClockIdBySequence.Remove(sequenceId);
+                    invalidSequences.Remove(sequenceId);
+                }
+                else if (packet.PreviousPacketDropped)
+                {
+                    defaultTimestampClockIdBySequence.Remove(sequenceId);
+                    invalidSequences.Add(sequenceId);
+                    continue;
+                }
+
+                if (invalidSequences.Contains(sequenceId))
+                {
+                    continue;
+                }
+
+                if (packet.HasTimestamp)
+                {
+                    uint? defaultTimestampClockId = defaultTimestampClockIdBySequence.TryGetValue(sequenceId, out uint clockId) ? clockId : null;
+                    yield return (GetPacketTimestampClock(packet, defaultTimestampClockId), packet.Timestamp);
+                }
+
+                if (packet.TracePacketDefaults?.HasTimestampClockId ?? false)
+                {
+                    defaultTimestampClockIdBySequence[sequenceId] = packet.TracePacketDefaults.TimestampClockId;
+                }
+            }
+        }
+
+        private static BuiltinClock GetPacketTimestampClock(TracePacket packet, uint? defaultTimestampClockId)
+        {
+            return packet.HasTimestampClockId ?
+                (BuiltinClock)packet.TimestampClockId :
+                (BuiltinClock)(defaultTimestampClockId ?? (uint)BuiltinClock.Boottime);
         }
 
         private bool TryConvertTimestampThroughSnapshots(BuiltinClock fromClockId, BuiltinClock toClockId, ulong fromTimestamp, out ulong convertedTimestamp)

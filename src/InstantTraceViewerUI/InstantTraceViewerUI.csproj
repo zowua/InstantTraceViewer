@@ -5,17 +5,26 @@
     <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
     <Nullable>annotations</Nullable>
     <Platforms>x64;ARM64</Platforms>
+    <HexaImGuiVersion>2.2.9</HexaImGuiVersion>
+    <MacTargetFramework>net8.0</MacTargetFramework>
+    <WindowsTargetFramework>net10.0-windows10.0.22621.0</WindowsTargetFramework>
+    <BuildTargetPlatform Condition="'$(BuildTargetPlatform)' == '' and ('$(RuntimeIdentifier)' == 'osx-arm64' or '$(RuntimeIdentifier)' == 'osx-x64')">macos</BuildTargetPlatform>
+    <BuildTargetPlatform Condition="'$(BuildTargetPlatform)' == '' and ('$(RuntimeIdentifier)' == 'win-x64' or '$(RuntimeIdentifier)' == 'win-arm64')">windows</BuildTargetPlatform>
+    <BuildTargetPlatform Condition="'$(BuildTargetPlatform)' == '' and '$(TargetFramework)' == '$(MacTargetFramework)'">macos</BuildTargetPlatform>
+    <BuildTargetPlatform Condition="'$(BuildTargetPlatform)' == '' and '$(TargetFramework)' == '$(WindowsTargetFramework)'">windows</BuildTargetPlatform>
+    <BuildTargetPlatform Condition="'$(BuildTargetPlatform)' == '' and '$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">macos</BuildTargetPlatform>
+    <BuildTargetPlatform Condition="'$(BuildTargetPlatform)' == ''">windows</BuildTargetPlatform>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">
+  <PropertyGroup Condition="'$(BuildTargetPlatform)' == 'macos'">
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework Condition="'$(TargetFramework)' == ''">$(MacTargetFramework)</TargetFramework>
     <RuntimeIdentifiers>osx-arm64;osx-x64</RuntimeIdentifiers>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' != 'true'">
+  <PropertyGroup Condition="'$(BuildTargetPlatform)' == 'windows'">
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <TargetFramework Condition="'$(TargetFramework)' == ''">$(WindowsTargetFramework)</TargetFramework>
     <TargetPlatformMinVersion>10.0.22621.0</TargetPlatformMinVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
@@ -62,7 +71,7 @@
     <PackageReference Include="AdvancedSharpAdbClient" Version="3.6.16" />
     <PackageReference Include="Google.Protobuf" Version="3.35.0-rc1" />
     <PackageReference Include="Google.Protobuf.Tools" Version="3.34.1" />
-    <PackageReference Include="Hexa.NET.ImGui" Version="2.2.9" />
+    <PackageReference Include="Hexa.NET.ImGui" Version="$(HexaImGuiVersion)" />
     <PackageReference Include="Hexa.NET.ImGui.Backends" Version="1.0.18" />
     <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.2" />
   </ItemGroup>
@@ -111,6 +120,6 @@
   </Target>
 
   <Target Name="BuildMacNative" BeforeTargets="PrepareForBuild" Condition="'$(TargetFramework)' == 'net8.0' and '$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">
-    <Exec Command="bash &quot;$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../scripts/build-macos-native.sh'))&quot; &quot;$(MSBuildProjectDirectory)&quot; &quot;$(TargetDir)&quot;" />
+    <Exec Command="bash &quot;$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../scripts/build-macos-native.sh'))&quot; &quot;$(MSBuildProjectDirectory)&quot; &quot;$(TargetDir)&quot; &quot;$(RuntimeIdentifier)&quot; &quot;$(HexaImGuiVersion)&quot;" />
   </Target>
 </Project>

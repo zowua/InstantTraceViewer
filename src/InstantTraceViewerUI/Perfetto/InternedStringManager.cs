@@ -26,22 +26,16 @@ namespace InstantTraceViewerUI.Perfetto
 
         public void ProcessPacket(TracePacket packet)
         {
+            SequenceData sequenceData = GetOrCreateSequenceData(packet.TrustedPacketSequenceId);
+            if (PerfettoSequenceState.IsCleanStateCleared(packet))
+            {
+                sequenceData.Clear();
+            }
+
             // Track all interned strings.
             if (packet.InternedData == null)
             {
                 return;
-            }
-
-            SequenceData sequenceData = null;
-            if (!allSequenceData.TryGetValue(packet.TrustedPacketSequenceId, out sequenceData))
-            {
-                sequenceData = new SequenceData();
-                allSequenceData.Add(packet.TrustedPacketSequenceId, sequenceData);
-            }
-
-            if (packet.IncrementalStateCleared)
-            {
-                sequenceData.Clear();
             }
 
             foreach (var eventName in packet.InternedData.EventNames)
@@ -104,6 +98,17 @@ namespace InstantTraceViewerUI.Perfetto
             }
 
             return name;
+        }
+
+        private SequenceData GetOrCreateSequenceData(uint sequenceId)
+        {
+            if (!allSequenceData.TryGetValue(sequenceId, out SequenceData sequenceData))
+            {
+                sequenceData = new SequenceData();
+                allSequenceData.Add(sequenceId, sequenceData);
+            }
+
+            return sequenceData;
         }
     }
 }

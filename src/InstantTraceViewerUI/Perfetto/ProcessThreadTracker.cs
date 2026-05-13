@@ -11,6 +11,9 @@ namespace InstantTraceViewerUI.Perfetto
         // TODO: Add Uid? ParentId? Currently not needed.
         public record class ProcessData(int Pid, string Name);
 
+        private record class TrackData(ulong Uuid, ulong ParentUuid, ProcessData? ProcessData, ThreadData? ThreadData);
+
+        private Dictionary<ulong, TrackData> _trackByUuid = new(); // Uuid is key
         private Dictionary<ulong, ThreadData> _threadNameByUuid = new(); // Uuid is key
         private Dictionary<ulong, ProcessData> _processNameByUuid = new(); // Uuid is key
 
@@ -24,29 +27,36 @@ namespace InstantTraceViewerUI.Perfetto
         {
             // For unknown reasons there may be repeats (same Uuid or same TrustedPacketSequenceId).
 
-            if (packet.TrackDescriptor?.Process != null)
+            if (packet.TrackDescriptor != null)
             {
-                if (packet.TrackDescriptor.Process.HasPid)
+                ProcessData? processData = null;
+                ThreadData? threadData = null;
+
+                if (packet.TrackDescriptor.Process?.HasPid ?? false)
                 {
                     string processName = packet.TrackDescriptor.Process.HasProcessName ? packet.TrackDescriptor.Process.ProcessName : string.Empty;
-                    ProcessData processData = new ProcessData(packet.TrackDescriptor.Process.Pid, processName);
+                    processData = new ProcessData(packet.TrackDescriptor.Process.Pid, processName);
                     UpdateProcessByUuid(packet.TrackDescriptor.Uuid, processData);
                     UpdateProcessByTrustedPacketSequenceId(packet.TrustedPacketSequenceId, processData);
                     UpdateProcessByPid(packet.TrackDescriptor.Process.Pid, processData);
                 }
-            }
 
-            if (packet.TrackDescriptor?.Thread != null)
-            {
-                if (packet.TrackDescriptor.Thread.HasTid)
+                if (packet.TrackDescriptor.Thread?.HasTid ?? false)
                 {
                     string threadName = packet.TrackDescriptor.Thread.HasThreadName ? packet.TrackDescriptor.Thread.ThreadName : string.Empty;
                     int pid = packet.TrackDescriptor.Thread.HasPid ? packet.TrackDescriptor.Thread.Pid : 0;
-                    ThreadData threadData = new ThreadData(packet.TrackDescriptor.Thread.Tid, pid, threadName);
+                    threadData = new ThreadData(packet.TrackDescriptor.Thread.Tid, pid, threadName);
                     UpdateThreadByUuid(packet.TrackDescriptor.Uuid, threadData);
                     UpdateThreadByTrustedPacketSequenceId(packet.TrustedPacketSequenceId, threadData);
                     UpdateThreadByTid(packet.TrackDescriptor.Thread.Tid, threadData);
                 }
+
+                TrackData trackData = new(
+                    packet.TrackDescriptor.Uuid,
+                    packet.TrackDescriptor.HasParentUuid ? packet.TrackDescriptor.ParentUuid : 0,
+                    processData,
+                    threadData);
+                UpdateTrackByUuid(packet.TrackDescriptor.Uuid, trackData);
             }
 
             if (packet.ProcessTree != null)
@@ -69,6 +79,11 @@ namespace InstantTraceViewerUI.Perfetto
                     }
                 }
             }
+        }
+
+        private void UpdateTrackByUuid(ulong uuid, TrackData trackData)
+        {
+            _trackByUuid[uuid] = MergeTrackData(_trackByUuid.TryGetValue(uuid, out TrackData? existingTrackData) ? existingTrackData : null, trackData);
         }
 
         private void UpdateThreadByUuid(ulong uuid, ThreadData threadData)
@@ -126,12 +141,26 @@ namespace InstantTraceViewerUI.Perfetto
                 !string.IsNullOrEmpty(existingProcessData.Name) ? existingProcessData.Name : newProcessData.Name);
         }
 
-        public ThreadData GetThreadData(TracePacket packet)
+        private static TrackData MergeTrackData(TrackData? existingTrackData, TrackData newTrackData)
         {
-            ThreadData threadData = null;
-            if (packet.TrackEvent?.HasTrackUuid ?? false)
+            if (existingTrackData == null)
             {
-                _threadNameByUuid.TryGetValue(packet.TrackEvent.TrackUuid, out threadData);
+                return newTrackData;
+            }
+
+            return new TrackData(
+                existingTrackData.Uuid != 0 ? existingTrackData.Uuid : newTrackData.Uuid,
+                existingTrackData.ParentUuid != 0 ? existingTrackData.ParentUuid : newTrackData.ParentUuid,
+                existingTrackData.ProcessData != null && newTrackData.ProcessData != null ? MergeProcessData(existingTrackData.ProcessData, newTrackData.ProcessData) : existingTrackData.ProcessData ?? newTrackData.ProcessData,
+                existingTrackData.ThreadData != null && newTrackData.ThreadData != null ? MergeThreadData(existingTrackData.ThreadData, newTrackData.ThreadData) : existingTrackData.ThreadData ?? newTrackData.ThreadData);
+        }
+
+        public ThreadData? GetThreadData(TracePacket packet, ulong? defaultTrackUuid)
+        {
+            ThreadData? threadData = null;
+            if (TryGetEffectiveTrackUuid(packet, defaultTrackUuid, out ulong trackUuid))
+            {
+                threadData = GetThreadDataByTrackUuid(trackUuid);
             }
 
             if (threadData == null)
@@ -142,12 +171,12 @@ namespace InstantTraceViewerUI.Perfetto
             return threadData;
         }
 
-        public ProcessData GetProcessData(TracePacket packet, ThreadData? threadData)
+        public ProcessData? GetProcessData(TracePacket packet, ThreadData? threadData, ulong? defaultTrackUuid)
         {
-            ProcessData processData = null;
-            if (packet.TrackEvent?.HasTrackUuid ?? false)
+            ProcessData? processData = null;
+            if (TryGetEffectiveTrackUuid(packet, defaultTrackUuid, out ulong trackUuid))
             {
-                _processNameByUuid.TryGetValue(packet.TrackEvent.TrackUuid, out processData);
+                processData = GetProcessDataByTrackUuid(trackUuid);
             }
 
             if (processData == null)
@@ -163,16 +192,99 @@ namespace InstantTraceViewerUI.Perfetto
             return processData;
         }
 
-        public ThreadData GetThreadDataByTid(int tid)
+        private static bool TryGetEffectiveTrackUuid(TracePacket packet, ulong? defaultTrackUuid, out ulong trackUuid)
         {
-            ThreadData threadData = null;
+            if (packet.TrackEvent == null)
+            {
+                trackUuid = 0;
+                return false;
+            }
+
+            if (packet.TrackEvent.HasTrackUuid)
+            {
+                trackUuid = packet.TrackEvent.TrackUuid;
+                return true;
+            }
+
+            trackUuid = defaultTrackUuid ?? 0;
+            return true;
+        }
+
+        private ThreadData? GetThreadDataByTrackUuid(ulong trackUuid)
+        {
+            return GetThreadDataByTrackUuid(trackUuid, new HashSet<ulong>());
+        }
+
+        private ThreadData? GetThreadDataByTrackUuid(ulong trackUuid, HashSet<ulong> visited)
+        {
+            if (!visited.Add(trackUuid))
+            {
+                return null;
+            }
+
+            if (_threadNameByUuid.TryGetValue(trackUuid, out ThreadData? threadData))
+            {
+                return threadData;
+            }
+
+            if (!_trackByUuid.TryGetValue(trackUuid, out TrackData? trackData))
+            {
+                return null;
+            }
+
+            if (trackData.ThreadData != null)
+            {
+                return trackData.ThreadData;
+            }
+
+            return trackData.ParentUuid != 0 ? GetThreadDataByTrackUuid(trackData.ParentUuid, visited) : null;
+        }
+
+        private ProcessData? GetProcessDataByTrackUuid(ulong trackUuid)
+        {
+            return GetProcessDataByTrackUuid(trackUuid, new HashSet<ulong>());
+        }
+
+        private ProcessData? GetProcessDataByTrackUuid(ulong trackUuid, HashSet<ulong> visited)
+        {
+            if (!visited.Add(trackUuid))
+            {
+                return null;
+            }
+
+            if (_processNameByUuid.TryGetValue(trackUuid, out ProcessData? processData))
+            {
+                return processData;
+            }
+
+            if (!_trackByUuid.TryGetValue(trackUuid, out TrackData? trackData))
+            {
+                return null;
+            }
+
+            if (trackData.ProcessData != null)
+            {
+                return trackData.ProcessData;
+            }
+
+            if (trackData.ThreadData != null && _processNameByPid.TryGetValue(trackData.ThreadData.Pid, out processData))
+            {
+                return processData;
+            }
+
+            return trackData.ParentUuid != 0 ? GetProcessDataByTrackUuid(trackData.ParentUuid, visited) : null;
+        }
+
+        public ThreadData? GetThreadDataByTid(int tid)
+        {
+            ThreadData? threadData = null;
             _threadNameByTid.TryGetValue(tid, out threadData);
             return threadData;
         }
 
-        public ProcessData GetProcessDataByPid(int pid)
+        public ProcessData? GetProcessDataByPid(int pid)
         {
-            ProcessData processData = null;
+            ProcessData? processData = null;
             _processNameByPid.TryGetValue(pid, out processData);
             return processData;
         }
