@@ -277,16 +277,12 @@ namespace InstantTraceViewerUI.Perfetto
 
         public ThreadData? GetThreadDataByTid(int tid)
         {
-            ThreadData? threadData = null;
-            _threadNameByTid.TryGetValue(tid, out threadData);
-            return threadData;
+            return _threadNameByTid.GetValueOrDefault(tid);
         }
 
         public ProcessData? GetProcessDataByPid(int pid)
         {
-            ProcessData? processData = null;
-            _processNameByPid.TryGetValue(pid, out processData);
-            return processData;
+            return _processNameByPid.GetValueOrDefault(pid);
         }
     }
 }

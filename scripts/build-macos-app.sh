@@ -92,11 +92,9 @@ dotnet publish "${project_path}" \
 
 rsync -a "${publish_dir}/" "${macos_dir}/"
 
-for native_file in libInstantTraceViewerNative.dylib; do
-  if [[ -f "${native_build_dir}/${native_file}" ]]; then
-    cp "${native_build_dir}/${native_file}" "${macos_dir}/${native_file}"
-  fi
-done
+if [[ -f "${native_build_dir}/libInstantTraceViewerNative.dylib" ]]; then
+  cp "${native_build_dir}/libInstantTraceViewerNative.dylib" "${macos_dir}/libInstantTraceViewerNative.dylib"
+fi
 
 if [[ ! -f "${macos_dir}/libInstantTraceViewerNative.dylib" ]]; then
   echo "Missing libInstantTraceViewerNative.dylib in ${macos_dir}" >&2

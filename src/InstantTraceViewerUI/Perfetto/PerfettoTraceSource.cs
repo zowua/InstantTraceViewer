@@ -562,7 +562,7 @@ namespace InstantTraceViewerUI.Perfetto
                 record.Pid = pid;
                 record.Tid = tid;
                 record.ProcessName = processThreadTracker.GetProcessDataByPid(pid)?.Name;
-                record.ThreadName = processThreadTracker?.GetThreadDataByTid(tid)?.Name;
+                record.ThreadName = processThreadTracker.GetThreadDataByTid(tid)?.Name;
 
                 // evt.Timestamp is more accurate than packet.Timestamp. It's already in the Realtime clock domain.
                 record.Timestamp = PerfettoClockConverter.RealTimeClockToDateTime(evt.Timestamp);

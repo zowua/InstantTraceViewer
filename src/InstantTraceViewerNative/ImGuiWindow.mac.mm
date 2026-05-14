@@ -11,6 +11,7 @@ extern "C" void objc_autoreleasePoolPop(void* pool);
 static constexpr CGFloat DefaultWidth = 1200.0;
 static constexpr CGFloat DefaultHeight = 800.0;
 
+// This host intentionally supports one application window per process.
 static NSWindow* g_window = nil;
 static NSView* g_view = nil;
 static CAMetalLayer* g_metalLayer = nil;

@@ -22,7 +22,7 @@ namespace InstantTraceViewerUI.Perfetto
         }
 
         // Key is TrustedPacketSequenceId
-        private Dictionary<uint, SequenceData> allSequenceData = new Dictionary<uint, SequenceData>();
+        private Dictionary<uint, SequenceData> _allSequenceData = new Dictionary<uint, SequenceData>();
 
         public void ProcessPacket(TracePacket packet)
         {
@@ -65,7 +65,7 @@ namespace InstantTraceViewerUI.Perfetto
         {
             string name;
             SequenceData sequenceData = null;
-            if (!allSequenceData.TryGetValue(packet.TrustedPacketSequenceId, out sequenceData) ||
+            if (!_allSequenceData.TryGetValue(packet.TrustedPacketSequenceId, out sequenceData) ||
                 !sequenceData.InternedEventNames.TryGetValue(eventNameIid, out name))
             {
                 name = $"Unknown NameIid={eventNameIid}";
@@ -78,7 +78,7 @@ namespace InstantTraceViewerUI.Perfetto
         {
             string name;
             SequenceData sequenceData = null;
-            if (!allSequenceData.TryGetValue(packet.TrustedPacketSequenceId, out sequenceData) ||
+            if (!_allSequenceData.TryGetValue(packet.TrustedPacketSequenceId, out sequenceData) ||
                 !sequenceData.InternedEventCategories.TryGetValue(categoryNameIid, out name))
             {
                 name = $"Unknown CategoryNameIid={categoryNameIid}";
@@ -91,7 +91,7 @@ namespace InstantTraceViewerUI.Perfetto
         {
             string name;
             SequenceData sequenceData = null;
-            if (!allSequenceData.TryGetValue(packet.TrustedPacketSequenceId, out sequenceData) ||
+            if (!_allSequenceData.TryGetValue(packet.TrustedPacketSequenceId, out sequenceData) ||
                 !sequenceData.InternedDebugAnnotationNames.TryGetValue(debugAnnotationNameIid, out name))
             {
                 name = $"Unknown DebugAnnotationNameIid={debugAnnotationNameIid}";
@@ -102,10 +102,10 @@ namespace InstantTraceViewerUI.Perfetto
 
         private SequenceData GetOrCreateSequenceData(uint sequenceId)
         {
-            if (!allSequenceData.TryGetValue(sequenceId, out SequenceData sequenceData))
+            if (!_allSequenceData.TryGetValue(sequenceId, out SequenceData sequenceData))
             {
                 sequenceData = new SequenceData();
-                allSequenceData.Add(sequenceId, sequenceData);
+                _allSequenceData.Add(sequenceId, sequenceData);
             }
 
             return sequenceData;
