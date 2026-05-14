@@ -3,6 +3,8 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/CADisplayLink.h>
 
+// Hexa's Objective-C backends are invoked from managed code, so managed code
+// needs explicit pool push/pop calls that can span those backend P/Invokes.
 extern "C" void* objc_autoreleasePoolPush(void);
 extern "C" void objc_autoreleasePoolPop(void* pool);
 
@@ -255,7 +257,6 @@ extern "C" int WindowBeginNextFrame(int* quit, int* occluded, void** renderPassD
             return 1;
         }
 
-        CGFloat framebufferScale = g_window.screen != nil ? g_window.screen.backingScaleFactor : NSScreen.mainScreen.backingScaleFactor;
         if (g_view.bounds.size.width <= 0.0 || g_view.bounds.size.height <= 0.0 || g_window.isMiniaturized)
         {
             *occluded = 1;
@@ -277,6 +278,7 @@ extern "C" int WindowBeginNextFrame(int* quit, int* occluded, void** renderPassD
             WaitForNextFrame();
         }
 
+        CGFloat framebufferScale = g_window.screen != nil ? g_window.screen.backingScaleFactor : NSScreen.mainScreen.backingScaleFactor;
         g_metalLayer.contentsScale = framebufferScale;
         g_metalLayer.frame = g_view.bounds;
         g_metalLayer.drawableSize = CGSizeMake(g_view.bounds.size.width * framebufferScale, g_view.bounds.size.height * framebufferScale);

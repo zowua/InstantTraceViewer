@@ -74,6 +74,7 @@ namespace InstantTraceViewerUI
 #if WINDOWS
             if (OperatingSystem.IsWindows())
             {
+                // Windows does not split frame resource ownership between managed and native code.
                 return;
             }
 #endif

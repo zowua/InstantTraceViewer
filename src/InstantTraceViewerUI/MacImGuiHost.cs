@@ -223,28 +223,28 @@ namespace InstantTraceViewerUI
             NativeWindowPopAutoreleasePool(pool);
         }
 
-        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Winapi)]
+        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
         private static extern int WindowInitialize(out nint view, out nint device);
 
-        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowBeginNextFrame")]
+        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "WindowBeginNextFrame")]
         private static extern int NativeWindowBeginNextFrame(out int quit, out int occluded, out nint renderPassDescriptor);
 
-        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowBeginRender")]
+        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "WindowBeginRender")]
         private static extern int NativeWindowBeginRender(out nint commandBuffer, out nint renderEncoder);
 
-        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowEndRender")]
+        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "WindowEndRender")]
         private static extern int NativeWindowEndRender();
 
-        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowCancelFrame")]
+        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "WindowCancelFrame")]
         private static extern int NativeWindowCancelFrame();
 
-        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowPushAutoreleasePool")]
+        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "WindowPushAutoreleasePool")]
         private static extern nint NativeWindowPushAutoreleasePool();
 
-        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowPopAutoreleasePool")]
+        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "WindowPopAutoreleasePool")]
         private static extern void NativeWindowPopAutoreleasePool(nint pool);
 
-        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Winapi, EntryPoint = "WindowCleanup")]
+        [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "WindowCleanup")]
         private static extern int NativeWindowCleanup();
     }
 }
