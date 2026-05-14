@@ -29,34 +29,50 @@ namespace InstantTraceViewerUI.Perfetto
 
             if (packet.TrackDescriptor != null)
             {
+                TrackDescriptor trackDescriptor = packet.TrackDescriptor;
                 ProcessData? processData = null;
                 ThreadData? threadData = null;
 
-                if (packet.TrackDescriptor.Process?.HasPid ?? false)
+                if (trackDescriptor.Process?.HasPid ?? false)
                 {
-                    string processName = packet.TrackDescriptor.Process.HasProcessName ? packet.TrackDescriptor.Process.ProcessName : string.Empty;
-                    processData = new ProcessData(packet.TrackDescriptor.Process.Pid, processName);
-                    UpdateProcessByUuid(packet.TrackDescriptor.Uuid, processData);
-                    UpdateProcessByTrustedPacketSequenceId(packet.TrustedPacketSequenceId, processData);
-                    UpdateProcessByPid(packet.TrackDescriptor.Process.Pid, processData);
+                    int pid = trackDescriptor.Process.Pid;
+                    string processName = trackDescriptor.Process.HasProcessName ? trackDescriptor.Process.ProcessName : string.Empty;
+                    processData = new ProcessData(pid, processName);
+
+                    _processNameByUuid.TryGetValue(trackDescriptor.Uuid, out ProcessData? processByUuid);
+                    _processNameByUuid[trackDescriptor.Uuid] = MergeProcessData(processByUuid, processData);
+
+                    _processNameByTrustedPacketSequenceId.TryGetValue(packet.TrustedPacketSequenceId, out ProcessData? processBySequence);
+                    _processNameByTrustedPacketSequenceId[packet.TrustedPacketSequenceId] = MergeProcessData(processBySequence, processData);
+
+                    _processNameByPid.TryGetValue(pid, out ProcessData? processByPid);
+                    _processNameByPid[pid] = MergeProcessData(processByPid, processData);
                 }
 
-                if (packet.TrackDescriptor.Thread?.HasTid ?? false)
+                if (trackDescriptor.Thread?.HasTid ?? false)
                 {
-                    string threadName = packet.TrackDescriptor.Thread.HasThreadName ? packet.TrackDescriptor.Thread.ThreadName : string.Empty;
-                    int pid = packet.TrackDescriptor.Thread.HasPid ? packet.TrackDescriptor.Thread.Pid : 0;
-                    threadData = new ThreadData(packet.TrackDescriptor.Thread.Tid, pid, threadName);
-                    UpdateThreadByUuid(packet.TrackDescriptor.Uuid, threadData);
-                    UpdateThreadByTrustedPacketSequenceId(packet.TrustedPacketSequenceId, threadData);
-                    UpdateThreadByTid(packet.TrackDescriptor.Thread.Tid, threadData);
+                    int tid = trackDescriptor.Thread.Tid;
+                    string threadName = trackDescriptor.Thread.HasThreadName ? trackDescriptor.Thread.ThreadName : string.Empty;
+                    int pid = trackDescriptor.Thread.HasPid ? trackDescriptor.Thread.Pid : 0;
+                    threadData = new ThreadData(tid, pid, threadName);
+
+                    _threadNameByUuid.TryGetValue(trackDescriptor.Uuid, out ThreadData? threadByUuid);
+                    _threadNameByUuid[trackDescriptor.Uuid] = MergeThreadData(threadByUuid, threadData);
+
+                    _threadNameByTrustedPacketSequenceId.TryGetValue(packet.TrustedPacketSequenceId, out ThreadData? threadBySequence);
+                    _threadNameByTrustedPacketSequenceId[packet.TrustedPacketSequenceId] = MergeThreadData(threadBySequence, threadData);
+
+                    _threadNameByTid.TryGetValue(tid, out ThreadData? threadByTid);
+                    _threadNameByTid[tid] = MergeThreadData(threadByTid, threadData);
                 }
 
                 TrackData trackData = new(
-                    packet.TrackDescriptor.Uuid,
-                    packet.TrackDescriptor.HasParentUuid ? packet.TrackDescriptor.ParentUuid : 0,
+                    trackDescriptor.Uuid,
+                    trackDescriptor.HasParentUuid ? trackDescriptor.ParentUuid : 0,
                     processData,
                     threadData);
-                UpdateTrackByUuid(packet.TrackDescriptor.Uuid, trackData);
+                _trackByUuid.TryGetValue(trackDescriptor.Uuid, out TrackData? existingTrackData);
+                _trackByUuid[trackDescriptor.Uuid] = MergeTrackData(existingTrackData, trackData);
             }
 
             if (packet.ProcessTree != null)
@@ -66,7 +82,9 @@ namespace InstantTraceViewerUI.Perfetto
                     if (process.HasPid)
                     {
                         string processName = process.Cmdline.Count > 0 ? process.Cmdline.First() : string.Empty;
-                        UpdateProcessByPid(process.Pid, new ProcessData(process.Pid, processName));
+                        ProcessData processData = new(process.Pid, processName);
+                        _processNameByPid.TryGetValue(process.Pid, out ProcessData? processByPid);
+                        _processNameByPid[process.Pid] = MergeProcessData(processByPid, processData);
                     }
                 }
 
@@ -75,45 +93,12 @@ namespace InstantTraceViewerUI.Perfetto
                     if (thread.HasTid)
                     {
                         string threadName = thread.HasName ? thread.Name : string.Empty;
-                        UpdateThreadByTid(thread.Tid, new ThreadData(thread.Tid, thread.Tgid /* pid */, threadName));
+                        ThreadData threadData = new(thread.Tid, thread.Tgid /* pid */, threadName);
+                        _threadNameByTid.TryGetValue(thread.Tid, out ThreadData? threadByTid);
+                        _threadNameByTid[thread.Tid] = MergeThreadData(threadByTid, threadData);
                     }
                 }
             }
-        }
-
-        private void UpdateTrackByUuid(ulong uuid, TrackData trackData)
-        {
-            _trackByUuid[uuid] = MergeTrackData(_trackByUuid.TryGetValue(uuid, out TrackData? existingTrackData) ? existingTrackData : null, trackData);
-        }
-
-        private void UpdateThreadByUuid(ulong uuid, ThreadData threadData)
-        {
-            _threadNameByUuid[uuid] = MergeThreadData(_threadNameByUuid.TryGetValue(uuid, out ThreadData? existingThreadData) ? existingThreadData : null, threadData);
-        }
-
-        private void UpdateThreadByTrustedPacketSequenceId(uint trustedPacketSequenceId, ThreadData threadData)
-        {
-            _threadNameByTrustedPacketSequenceId[trustedPacketSequenceId] = MergeThreadData(_threadNameByTrustedPacketSequenceId.TryGetValue(trustedPacketSequenceId, out ThreadData? existingThreadData) ? existingThreadData : null, threadData);
-        }
-
-        private void UpdateThreadByTid(int tid, ThreadData threadData)
-        {
-            _threadNameByTid[tid] = MergeThreadData(_threadNameByTid.TryGetValue(tid, out ThreadData? existingThreadData) ? existingThreadData : null, threadData);
-        }
-
-        private void UpdateProcessByUuid(ulong uuid, ProcessData processData)
-        {
-            _processNameByUuid[uuid] = MergeProcessData(_processNameByUuid.TryGetValue(uuid, out ProcessData? existingProcessData) ? existingProcessData : null, processData);
-        }
-
-        private void UpdateProcessByTrustedPacketSequenceId(uint trustedPacketSequenceId, ProcessData processData)
-        {
-            _processNameByTrustedPacketSequenceId[trustedPacketSequenceId] = MergeProcessData(_processNameByTrustedPacketSequenceId.TryGetValue(trustedPacketSequenceId, out ProcessData? existingProcessData) ? existingProcessData : null, processData);
-        }
-
-        private void UpdateProcessByPid(int pid, ProcessData processData)
-        {
-            _processNameByPid[pid] = MergeProcessData(_processNameByPid.TryGetValue(pid, out ProcessData? existingProcessData) ? existingProcessData : null, processData);
         }
 
         private static ThreadData MergeThreadData(ThreadData? existingThreadData, ThreadData newThreadData)
@@ -160,7 +145,7 @@ namespace InstantTraceViewerUI.Perfetto
             ThreadData? threadData = null;
             if (TryGetEffectiveTrackUuid(packet, defaultTrackUuid, out ulong trackUuid))
             {
-                threadData = GetThreadDataByTrackUuid(trackUuid);
+                threadData = GetThreadDataByTrackUuid(trackUuid, new HashSet<ulong>());
             }
 
             if (threadData == null)
@@ -176,7 +161,7 @@ namespace InstantTraceViewerUI.Perfetto
             ProcessData? processData = null;
             if (TryGetEffectiveTrackUuid(packet, defaultTrackUuid, out ulong trackUuid))
             {
-                processData = GetProcessDataByTrackUuid(trackUuid);
+                processData = GetProcessDataByTrackUuid(trackUuid, new HashSet<ulong>());
             }
 
             if (processData == null)
@@ -210,11 +195,6 @@ namespace InstantTraceViewerUI.Perfetto
             return true;
         }
 
-        private ThreadData? GetThreadDataByTrackUuid(ulong trackUuid)
-        {
-            return GetThreadDataByTrackUuid(trackUuid, new HashSet<ulong>());
-        }
-
         private ThreadData? GetThreadDataByTrackUuid(ulong trackUuid, HashSet<ulong> visited)
         {
             if (!visited.Add(trackUuid))
@@ -238,11 +218,6 @@ namespace InstantTraceViewerUI.Perfetto
             }
 
             return trackData.ParentUuid != 0 ? GetThreadDataByTrackUuid(trackData.ParentUuid, visited) : null;
-        }
-
-        private ProcessData? GetProcessDataByTrackUuid(ulong trackUuid)
-        {
-            return GetProcessDataByTrackUuid(trackUuid, new HashSet<ulong>());
         }
 
         private ProcessData? GetProcessDataByTrackUuid(ulong trackUuid, HashSet<ulong> visited)
@@ -277,12 +252,14 @@ namespace InstantTraceViewerUI.Perfetto
 
         public ThreadData? GetThreadDataByTid(int tid)
         {
-            return _threadNameByTid.GetValueOrDefault(tid);
+            _threadNameByTid.TryGetValue(tid, out ThreadData? threadData);
+            return threadData;
         }
 
         public ProcessData? GetProcessDataByPid(int pid)
         {
-            return _processNameByPid.GetValueOrDefault(pid);
+            _processNameByPid.TryGetValue(pid, out ProcessData? processData);
+            return processData;
         }
     }
 }
