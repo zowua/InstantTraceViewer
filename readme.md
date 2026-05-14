@@ -57,3 +57,62 @@ These are the latest builds produced by this project's GitHub Actions pipeline.
 
 * Download [InstantTraceViewer-x64.zip](https://nightly.link/brycehutchings/InstantTraceViewer/workflows/build-windows/main/InstantTraceViewer-x64.zip)
 * Download [InstantTraceViewer-ARM64.zip](https://nightly.link/brycehutchings/InstantTraceViewer/workflows/build-windows/main/InstantTraceViewer-ARM64.zip)
+
+## macOS Builds
+
+macOS builds require the .NET 8 SDK, Xcode command line tools, and the repository submodules.
+
+```bash
+xcode-select --install
+git submodule update --init --recursive
+```
+
+To run the app directly from source:
+
+```bash
+dotnet run --project src/InstantTraceViewerUI/InstantTraceViewerUI.csproj
+```
+
+To open a Perfetto trace at launch:
+
+```bash
+dotnet run --project src/InstantTraceViewerUI/InstantTraceViewerUI.csproj -- path/to/trace.pftrace
+```
+
+To build a self-contained `.app` bundle:
+
+```bash
+scripts/build-macos-app.sh
+```
+
+By default, the script detects the host architecture:
+
+* Apple Silicon (`arm64`) builds `osx-arm64`
+* Intel (`x86_64`) builds `osx-x64`
+
+The app bundle is written to:
+
+```bash
+artifacts/app/InstantTraceViewer.app
+```
+
+To build a specific architecture or output path:
+
+```bash
+scripts/build-macos-app.sh -r osx-arm64
+scripts/build-macos-app.sh -r osx-x64
+scripts/build-macos-app.sh -o /tmp/InstantTraceViewer.app
+```
+
+The script performs an ad-hoc codesign by default, which is enough for local development:
+
+```bash
+codesign --verify --deep --strict artifacts/app/InstantTraceViewer.app
+open artifacts/app/InstantTraceViewer.app
+```
+
+For distribution outside your own machine, sign with a Developer ID certificate and notarize the app:
+
+```bash
+scripts/build-macos-app.sh --sign-identity "Developer ID Application: Your Name (TEAMID)"
+```
