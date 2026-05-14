@@ -77,6 +77,9 @@ namespace InstantTraceViewerUI.Perfetto
 
             if (packet.ProcessTree != null)
             {
+                // ProcessTree can report numeric identities before names/cmdlines.
+                // Keep id-only records so later events still resolve PIDs/TIDs; the
+                // merge helpers fill names in when a later descriptor provides them.
                 foreach (var process in packet.ProcessTree.Processes)
                 {
                     if (process.HasPid)

@@ -43,6 +43,9 @@ To clone the repository, use the following command in your terminal:
 git clone https://github.com/brycehutchings/InstantTraceViewer
 ```
 
+This repository no longer requires git submodules; the Dear ImGui runtime and
+backends are restored from NuGet packages during the normal .NET restore step.
+
 ## Developer Builds
 
 These are the latest builds produced by this project's GitHub Actions pipeline.
