@@ -10,4 +10,5 @@ ARM64/
 src/InstantTraceViewerMsixPackaging/InstantTraceViewerMsixPackaging.assets.cache
 .tmp-mac-native/
 src/InstantTraceViewerUI/native/
+artifacts/
 imgui.ini
