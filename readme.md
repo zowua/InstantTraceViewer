@@ -37,18 +37,10 @@ winget install 9NWPWZGRVL2C
 
 ## Cloning the Repository
 
-> ⚠️ **WARNING:** This repository uses nested submodules. Make sure you initialize submodules recursively, otherwise you will get compile errors!
-
 To clone the repository, use the following command in your terminal:
 
 ```bash
-git clone https://github.com/brycehutchings/InstantTraceViewer --recursive
-```
-
-If you forget to use `--recurse-submodules` when cloning, you can use the following command to update the submodules:
-
-```bash
-git submodule update --init --recursive
+git clone https://github.com/brycehutchings/InstantTraceViewer
 ```
 
 ## Developer Builds
@@ -60,11 +52,11 @@ These are the latest builds produced by this project's GitHub Actions pipeline.
 
 ## macOS Builds
 
-macOS builds require the .NET 8 SDK, Xcode command line tools, and the repository submodules.
+macOS builds require the .NET 8 SDK and Xcode command line tools.
+The Dear ImGui runtime and OSX/Metal backends are supplied by the Hexa.NET.ImGui NuGet packages.
 
 ```bash
 xcode-select --install
-git submodule update --init --recursive
 ```
 
 To run the app directly from source:

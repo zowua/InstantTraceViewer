@@ -120,6 +120,6 @@
   </Target>
 
   <Target Name="BuildMacNative" BeforeTargets="PrepareForBuild" Condition="'$(TargetFramework)' == 'net8.0' and '$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">
-    <Exec Command="bash &quot;$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../scripts/build-macos-native.sh'))&quot; &quot;$(MSBuildProjectDirectory)&quot; &quot;$(TargetDir)&quot; &quot;$(RuntimeIdentifier)&quot; &quot;$(HexaImGuiVersion)&quot;" />
+    <Exec Command="bash &quot;$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../scripts/build-macos-native.sh'))&quot; &quot;$(MSBuildProjectDirectory)&quot; &quot;$(TargetDir)&quot; &quot;$(RuntimeIdentifier)&quot;" />
   </Target>
 </Project>

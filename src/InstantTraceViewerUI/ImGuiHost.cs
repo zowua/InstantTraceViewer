@@ -69,6 +69,18 @@ namespace InstantTraceViewerUI
             MacImGuiHost.WindowEndNextFrame();
         }
 
+        public static void WindowCancelFrame()
+        {
+#if WINDOWS
+            if (OperatingSystem.IsWindows())
+            {
+                return;
+            }
+#endif
+
+            MacImGuiHost.WindowCancelFrame();
+        }
+
         public static void Shutdown(ImGuiContextPtr imguiContext)
         {
 #if WINDOWS
@@ -81,7 +93,7 @@ namespace InstantTraceViewerUI
             }
 #endif
 
-            MacImGuiHost.WindowCleanup();
+            MacImGuiHost.Shutdown(imguiContext);
         }
     }
 }

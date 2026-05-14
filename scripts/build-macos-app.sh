@@ -92,7 +92,7 @@ dotnet publish "${project_path}" \
 
 rsync -a "${publish_dir}/" "${macos_dir}/"
 
-for native_file in libInstantTraceViewerNative.dylib cimgui.dylib libcimgui.dylib; do
+for native_file in libInstantTraceViewerNative.dylib; do
   if [[ -f "${native_build_dir}/${native_file}" ]]; then
     cp "${native_build_dir}/${native_file}" "${macos_dir}/${native_file}"
   fi

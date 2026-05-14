@@ -3,9 +3,8 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/CADisplayLink.h>
 
-#include "imgui.h"
-#include "backends/imgui_impl_metal.h"
-#include "backends/imgui_impl_osx.h"
+extern "C" void* objc_autoreleasePoolPush(void);
+extern "C" void objc_autoreleasePoolPop(void* pool);
 
 static constexpr CGFloat DefaultWidth = 1200.0;
 static constexpr CGFloat DefaultHeight = 800.0;
@@ -19,12 +18,11 @@ static bool g_quitRequested = false;
 static bool g_hasPresentedFrame = false;
 static id<CAMetalDrawable> g_currentDrawable = nil;
 static MTLRenderPassDescriptor* g_currentRenderPassDescriptor = nil;
+static id<MTLCommandBuffer> g_currentCommandBuffer = nil;
+static id<MTLRenderCommandEncoder> g_currentRenderEncoder = nil;
 static CADisplayLink* g_displayLink = nil;
 static uint64_t g_displayLinkFrameCounter = 0;
 static uint64_t g_consumedDisplayLinkFrameCounter = 0;
-static bool g_imguiContextCreated = false;
-static bool g_osxBackendInitialized = false;
-static bool g_metalBackendInitialized = false;
 
 @interface InstantTraceWindowDelegate : NSObject <NSWindowDelegate>
 @end
@@ -101,10 +99,42 @@ static void WaitForNextFrame()
     g_consumedDisplayLinkFrameCounter = g_displayLinkFrameCounter;
 }
 
-extern "C" int WindowInitialize(ImGuiContext** imguiContext) noexcept
+static void ClearCurrentFrame(bool endEncoding)
+{
+    if (endEncoding && g_currentRenderEncoder != nil)
+    {
+        [g_currentRenderEncoder endEncoding];
+    }
+
+    g_currentRenderEncoder = nil;
+    g_currentCommandBuffer = nil;
+    g_currentDrawable = nil;
+    if (g_currentRenderPassDescriptor != nil)
+    {
+        g_currentRenderPassDescriptor.colorAttachments[0].texture = nil;
+    }
+}
+
+extern "C" void* WindowPushAutoreleasePool() noexcept
+{
+    return objc_autoreleasePoolPush();
+}
+
+extern "C" void WindowPopAutoreleasePool(void* pool) noexcept
+{
+    if (pool != nullptr)
+    {
+        objc_autoreleasePoolPop(pool);
+    }
+}
+
+extern "C" int WindowInitialize(void** view, void** device) noexcept
 {
     @autoreleasepool
     {
+        *view = nullptr;
+        *device = nullptr;
+
         if (g_window != nil)
         {
             return 1;
@@ -198,34 +228,19 @@ extern "C" int WindowInitialize(ImGuiContext** imguiContext) noexcept
             g_displayLink = nil;
         }
 
-        *imguiContext = ImGui::CreateContext();
-        if (*imguiContext == nullptr)
-        {
-            return FailInitialize();
-        }
-        g_imguiContextCreated = true;
-
-        if (!ImGui_ImplOSX_Init(g_view))
-        {
-            return FailInitialize();
-        }
-        g_osxBackendInitialized = true;
-
-        if (!ImGui_ImplMetal_Init(g_device))
-        {
-            return FailInitialize();
-        }
-        g_metalBackendInitialized = true;
+        *view = (__bridge void*)g_view;
+        *device = (__bridge void*)g_device;
         return 0;
     }
 }
 
-extern "C" int WindowBeginNextFrame(int* quit, int* occluded) noexcept
+extern "C" int WindowBeginNextFrame(int* quit, int* occluded, void** renderPassDescriptor) noexcept
 {
     @autoreleasepool
     {
         *quit = 0;
         *occluded = 0;
+        *renderPassDescriptor = nullptr;
 
         PumpPendingEvents();
 
@@ -235,17 +250,12 @@ extern "C" int WindowBeginNextFrame(int* quit, int* occluded) noexcept
             return 0;
         }
 
-        if (g_window == nil || g_view == nil || g_metalLayer == nil)
+        if (g_window == nil || g_view == nil || g_metalLayer == nil || g_currentRenderPassDescriptor == nil)
         {
             return 1;
         }
 
-        ImGuiIO& io = ImGui::GetIO();
-        io.DisplaySize = ImVec2((float)g_view.bounds.size.width, (float)g_view.bounds.size.height);
-
         CGFloat framebufferScale = g_window.screen != nil ? g_window.screen.backingScaleFactor : NSScreen.mainScreen.backingScaleFactor;
-        io.DisplayFramebufferScale = ImVec2((float)framebufferScale, (float)framebufferScale);
-
         if (g_view.bounds.size.width <= 0.0 || g_view.bounds.size.height <= 0.0 || g_window.isMiniaturized)
         {
             *occluded = 1;
@@ -283,45 +293,69 @@ extern "C" int WindowBeginNextFrame(int* quit, int* occluded) noexcept
         g_currentRenderPassDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
         g_currentRenderPassDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
 
-        ImGui_ImplMetal_NewFrame(g_currentRenderPassDescriptor);
-        ImGui_ImplOSX_NewFrame(g_view);
-        ImGui::NewFrame();
-
+        *renderPassDescriptor = (__bridge void*)g_currentRenderPassDescriptor;
         return 0;
     }
 }
 
-extern "C" int WindowEndNextFrame() noexcept
+extern "C" int WindowBeginRender(void** commandBuffer, void** renderEncoder) noexcept
 {
     @autoreleasepool
     {
+        *commandBuffer = nullptr;
+        *renderEncoder = nullptr;
+
         if (g_currentDrawable == nil || g_currentRenderPassDescriptor == nil)
         {
             return 0;
         }
 
-        ImGui::Render();
-
-        id<MTLCommandBuffer> commandBuffer = [g_commandQueue commandBuffer];
-        if (commandBuffer == nil)
+        g_currentCommandBuffer = [g_commandQueue commandBuffer];
+        if (g_currentCommandBuffer == nil)
         {
+            ClearCurrentFrame(false);
             return 1;
         }
 
-        id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:g_currentRenderPassDescriptor];
-        if (renderEncoder == nil)
+        g_currentRenderEncoder = [g_currentCommandBuffer renderCommandEncoderWithDescriptor:g_currentRenderPassDescriptor];
+        if (g_currentRenderEncoder == nil)
         {
+            ClearCurrentFrame(false);
             return 1;
         }
 
-        ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), commandBuffer, renderEncoder);
-        [renderEncoder endEncoding];
-        [commandBuffer presentDrawable:g_currentDrawable];
-        [commandBuffer commit];
+        *commandBuffer = (__bridge void*)g_currentCommandBuffer;
+        *renderEncoder = (__bridge void*)g_currentRenderEncoder;
+        return 0;
+    }
+}
 
-        g_hasPresentedFrame = true;
-        g_currentDrawable = nil;
-        g_currentRenderPassDescriptor.colorAttachments[0].texture = nil;
+extern "C" int WindowEndRender() noexcept
+{
+    @autoreleasepool
+    {
+        if (g_currentRenderEncoder != nil)
+        {
+            [g_currentRenderEncoder endEncoding];
+        }
+
+        if (g_currentCommandBuffer != nil && g_currentDrawable != nil)
+        {
+            [g_currentCommandBuffer presentDrawable:g_currentDrawable];
+            [g_currentCommandBuffer commit];
+            g_hasPresentedFrame = true;
+        }
+
+        ClearCurrentFrame(false);
+        return 0;
+    }
+}
+
+extern "C" int WindowCancelFrame() noexcept
+{
+    @autoreleasepool
+    {
+        ClearCurrentFrame(true);
         return 0;
     }
 }
@@ -330,21 +364,6 @@ extern "C" int WindowCleanup() noexcept
 {
     @autoreleasepool
     {
-        if (g_metalBackendInitialized)
-        {
-            ImGui_ImplMetal_Shutdown();
-        }
-
-        if (g_osxBackendInitialized)
-        {
-            ImGui_ImplOSX_Shutdown();
-        }
-
-        if (g_imguiContextCreated && ImGui::GetCurrentContext() != nullptr)
-        {
-            ImGui::DestroyContext();
-        }
-
         if (g_window != nil)
         {
             [g_window orderOut:nil];
@@ -356,7 +375,7 @@ extern "C" int WindowCleanup() noexcept
             [g_displayLink invalidate];
         }
 
-        g_currentDrawable = nil;
+        ClearCurrentFrame(false);
         g_currentRenderPassDescriptor = nil;
         g_displayLink = nil;
         g_displayLinkTarget = nil;
@@ -370,9 +389,6 @@ extern "C" int WindowCleanup() noexcept
         g_device = nil;
         g_quitRequested = false;
         g_hasPresentedFrame = false;
-        g_imguiContextCreated = false;
-        g_osxBackendInitialized = false;
-        g_metalBackendInitialized = false;
         return 0;
     }
 }
